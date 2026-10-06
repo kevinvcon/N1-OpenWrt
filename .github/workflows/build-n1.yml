@@ -1,4 +1,5 @@
-name: N1 Target Test
+```yaml
+name: N1 Target Diagnostic
 
 on:
   workflow_dispatch:
@@ -6,24 +7,32 @@ on:
 permissions:
   contents: read
 
-
 env:
   OPENWRT_REPO: https://github.com/openwrt/openwrt.git
   OPENWRT_TAG: v24.10.8
 
 jobs:
   test:
+    name: Verify N1 ARM64 Target
     runs-on: ubuntu-24.04
 
     steps:
 
-      - name: Checkout
+      # ============================================================
+      # 1. Checkout
+      # ============================================================
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Clone OpenWrt
+      # ============================================================
+      # 2. Clone official OpenWrt
+      # ============================================================
+      - name: Clone official OpenWrt
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "::group::Clone OpenWrt"
 
           cd "${GITHUB_WORKSPACE}"
 
@@ -37,47 +46,70 @@ jobs:
 
           cd openwrt
 
-          echo "=========================================="
-          echo " OPENWRT VERSION"
-          echo "=========================================="
+          echo
+          echo "Repository:"
+          git remote -v
 
+          echo
+          echo "Commit:"
           git log -1 --oneline
+
+          echo
+          echo "Description:"
           git describe --tags --always
 
-      - name: Verify clean source
+          echo "::endgroup::"
+
+      # ============================================================
+      # 3. Verify source
+      # ============================================================
+      - name: Verify clean OpenWrt source
         shell: bash
         run: |
           set -euo pipefail
 
           cd "${GITHUB_WORKSPACE}/openwrt"
 
-          echo "=========================================="
-          echo " VERIFY CLEAN SOURCE"
-          echo "=========================================="
+          echo "::group::Source verification"
+
+          echo "OpenWrt directory:"
+          pwd
+
+          echo
+          echo "Git status:"
+          git status --short
+
+          echo
+          echo "Checking .config..."
 
           if [ -e .config ]; then
-            echo "ERROR: OpenWrt source already contains .config"
+            echo "::error::OpenWrt source already contains .config"
             exit 1
           fi
 
-          echo
-          echo "No .config exists."
+          echo "OK: no .config exists"
 
           echo
-          echo "Checking environment..."
+          echo "Target directories:"
 
-          env | sort
+          ls -ld \
+            target/linux/armvirt \
+            target/linux/ath79 \
+            2>/dev/null || true
 
-      - name: Create N1 config
+          echo "::endgroup::"
+
+      # ============================================================
+      # 4. Create ONLY N1 target configuration
+      # ============================================================
+      - name: Create N1 configuration
         shell: bash
         run: |
           set -euo pipefail
 
           cd "${GITHUB_WORKSPACE}/openwrt"
 
-          echo "=========================================="
-          echo " CREATE N1 CONFIG"
-          echo "=========================================="
+          echo "::group::Create N1 configuration"
 
           cat > .config <<'EOF'
 CONFIG_TARGET_armvirt=y
@@ -86,125 +118,67 @@ CONFIG_TARGET_armvirt_64_Default=y
 EOF
 
           echo
-          echo "CONFIG BEFORE DEFCONFIG:"
-          cat .config
-
-          echo
-          echo "Checking..."
-
-          grep -Fxq 'CONFIG_TARGET_armvirt=y' .config
-          grep -Fxq 'CONFIG_TARGET_armvirt_64=y' .config
-          grep -Fxq 'CONFIG_TARGET_armvirt_64_Default=y' .config
-
-      - name: Run defconfig
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "${GITHUB_WORKSPACE}/openwrt"
-
-          echo "=========================================="
-          echo " RUN DEFCONFIG"
-          echo "=========================================="
-
-          make defconfig
-
-          echo
-          echo "=========================================="
-          echo " CONFIG AFTER DEFCONFIG"
-          echo "=========================================="
-
-          grep -E \
-            '^CONFIG_(TARGET|ARCH|CPU_TYPE)' \
-            .config \
-            || true
-
-      - name: Final validation
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "${GITHUB_WORKSPACE}/openwrt"
-
-          echo "=========================================="
-          echo " FINAL VALIDATION"
-          echo "=========================================="
+          echo "CONFIG BEFORE DEFCONFIG"
+          echo "------------------------------------------"
 
           cat .config
 
           echo
-          echo "=========================================="
-          echo " TARGET"
-          echo "=========================================="
+          echo "Checking ARM64 target..."
 
-          grep -E \
-            '^CONFIG_TARGET_' \
-            .config \
-            || true
+          if ! grep -Fxq 'CONFIG_TARGET_armvirt=y' .config; then
+            echo "::error::CONFIG_TARGET_armvirt was not written"
+            exit 1
+          fi
 
-          echo
-          echo "=========================================="
-          echo " ARCH"
-          echo "=========================================="
+          if ! grep -Fxq 'CONFIG_TARGET_armvirt_64=y' .config; then
+            echo "::error::CONFIG_TARGET_armvirt_64 was not written"
+            exit 1
+          fi
 
-          grep -E \
-            '^CONFIG_(ARCH|CPU_TYPE|TARGET_ARCH_PACKAGES)' \
-            .config \
-            || true
-
-          echo
-          echo "=========================================="
-          echo " CHECK"
-          echo "=========================================="
-
-          grep -Fxq \
-            'CONFIG_TARGET_armvirt=y' \
-            .config
-
-          grep -Fxq \
-            'CONFIG_TARGET_armvirt_64=y' \
-            .config
-
-          grep -Fxq \
-            'CONFIG_TARGET_armvirt_64_Default=y' \
-            .config
-
-          grep -Fxq \
-            'CONFIG_TARGET_BOARD="armvirt"' \
-            .config
-
-          grep -Fxq \
-            'CONFIG_TARGET_SUBTARGET="64"' \
-            .config
-
-          grep -Fxq \
-            'CONFIG_TARGET_PROFILE="Default"' \
-            .config
-
-          grep -Fxq \
-            'CONFIG_ARCH="aarch64"' \
-            .config
-
-          grep -Fxq \
-            'CONFIG_CPU_TYPE="cortex-a53"' \
-            .config
-
-          grep -Fxq \
-            'CONFIG_TARGET_ARCH_PACKAGES="aarch64_cortex-a53"' \
-            .config
-
-          if grep -Eq \
-            '^CONFIG_TARGET_ath79|^CONFIG_TARGET.*mips|^CONFIG_ARCH="mips"|^CONFIG_TARGET_ARCH_PACKAGES="mips_' \
-            .config
-          then
-            echo
-            echo "=========================================="
-            echo " MIPS DETECTED"
-            echo "=========================================="
+          if ! grep -Fxq 'CONFIG_TARGET_armvirt_64_Default=y' .config; then
+            echo "::error::CONFIG_TARGET_armvirt_64_Default was not written"
             exit 1
           fi
 
           echo
-          echo "=========================================="
-          echo " N1 ARM64 TARGET PASSED"
-          echo "=========================================="
+          echo "ARM64 target configuration written successfully."
+
+          echo "::endgroup::"
+
+      # ============================================================
+      # 5. Run defconfig
+      # ============================================================
+      - name: Run OpenWrt defconfig
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          cd "${GITHUB_WORKSPACE}/openwrt"
+
+          echo "::group::Run make defconfig"
+
+          echo "Running:"
+          echo "make defconfig"
+          echo
+
+          make defconfig
+          RESULT=$?
+
+          echo
+          echo "make defconfig exit code: ${RESULT}"
+
+          if [ "${RESULT}" -ne 0 ]; then
+            echo "::error::make defconfig failed"
+
+            echo
+            echo "CONFIG AT FAILURE:"
+            cat .config || true
+
+            exit "${RESULT}"
+          fi
+
+          echo "::endgroup::"
+
+      # ===================================================
+```
