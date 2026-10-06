@@ -11,8 +11,11 @@ env:
   OPENWRT_TAG: v24.10.8
 
 jobs:
+
   build:
-    name: Build armsr armv8 and package N1 S905D
+
+    name: Build N1 S905D - OpenWrt 24.10.8
+
     runs-on: ubuntu-24.04
 
     steps:
@@ -24,8 +27,9 @@ jobs:
       - name: Checkout configuration repository
         uses: actions/checkout@v4
 
+
       # ============================================================
-      # Host environment
+      # Prepare Ubuntu
       # ============================================================
 
       - name: Prepare Ubuntu 24.04
@@ -33,9 +37,9 @@ jobs:
         run: |
           set -euxo pipefail
 
-          echo "=============================================="
+          echo "=================================================="
           echo " Preparing Ubuntu 24.04"
-          echo "=============================================="
+          echo "=================================================="
 
           sudo apt-get update
 
@@ -44,7 +48,6 @@ jobs:
             clang \
             flex \
             bison \
-            g++ \
             gawk \
             gcc-multilib \
             g++-multilib \
@@ -53,6 +56,7 @@ jobs:
             libncurses-dev \
             libssl-dev \
             python3-setuptools \
+            python3-venv \
             rsync \
             swig \
             unzip \
@@ -62,6 +66,7 @@ jobs:
             curl \
             help2man \
             libelf-dev \
+            libdw-dev \
             bc \
             pkg-config \
             time \
@@ -70,12 +75,18 @@ jobs:
             ccache \
             zstd \
             device-tree-compiler \
-            qemu-utils
+            qemu-utils \
+            python3 \
+            perl \
+            tar \
+            gzip \
+            bzip2 \
+            xz-utils
 
           echo
-          echo "=============================================="
-          echo " Host tool versions"
-          echo "=============================================="
+          echo "=================================================="
+          echo " Host versions"
+          echo "=================================================="
 
           gcc --version | head -n 1
           g++ --version | head -n 1
@@ -85,23 +96,24 @@ jobs:
           git --version
 
           echo
-          echo "=============================================="
-          echo " Environment sanity check"
-          echo "=============================================="
+          echo "=================================================="
+          echo " Host resources"
+          echo "=================================================="
 
-          unset SED || true
-          unset GREP_OPTIONS || true
+          echo "CPU:"
+          nproc
 
-          echo "SED=${SED-}"
-          echo "GREP_OPTIONS=${GREP_OPTIONS-}"
+          echo
+          echo "Memory:"
+          free -h
 
           echo
           echo "Disk:"
           df -h
 
-          echo
-          echo "Memory:"
-          free -h
+          unset SED || true
+          unset GREP_OPTIONS || true
+
 
       # ============================================================
       # Clone OpenWrt
@@ -112,9 +124,9 @@ jobs:
         run: |
           set -euxo pipefail
 
-          echo "=============================================="
+          echo "=================================================="
           echo " Cloning OpenWrt ${OPENWRT_TAG}"
-          echo "=============================================="
+          echo "=================================================="
 
           git clone \
             --depth=1 \
@@ -133,17 +145,18 @@ jobs:
           grep -E 'VERSION_NUMBER:=' include/version.mk || true
 
           echo
-          echo "Checking armsr target..."
+          echo "Checking target:"
 
           test -d target/linux/armsr
           test -d target/linux/armsr/armv8
           test -f target/linux/armsr/Makefile
 
-          echo "armsr target: OK"
-          echo "armv8 subtarget: OK"
+          echo "armsr: OK"
+          echo "armv8: OK"
+
 
       # ============================================================
-      # Feeds
+      # Prepare feeds
       # ============================================================
 
       - name: Prepare feeds
@@ -153,22 +166,26 @@ jobs:
 
           cd openwrt
 
-          echo "=============================================="
+          echo "=================================================="
           echo " Preparing feeds"
-          echo "=============================================="
+          echo "=================================================="
 
           cp ../feeds.conf.default ./feeds.conf.default
 
           echo
-          echo "========== feeds.conf.default =========="
+          echo "=================================================="
+          echo " feeds.conf.default"
+          echo "=================================================="
+
           cat feeds.conf.default
 
           echo
-          echo "=============================================="
+          echo "=================================================="
           echo " Updating feeds"
-          echo "=============================================="
+          echo "=================================================="
 
-          ./scripts/feeds update -a 2>&1 | tee /tmp/feeds-update.log
+          ./scripts/feeds update -a \
+            2>&1 | tee /tmp/feeds-update.log
 
           STATUS=${PIPESTATUS[0]}
 
@@ -176,22 +193,26 @@ jobs:
           echo "feeds update exit code: ${STATUS}"
 
           if [ "${STATUS}" -ne 0 ]; then
+
             echo "::error::feeds update failed"
 
             echo
-            echo "========== FEEDS UPDATE LOG =========="
+            echo "=================================================="
+            echo " FEEDS UPDATE LOG"
+            echo "=================================================="
 
-            tail -n 500 /tmp/feeds-update.log
+            tail -n 1000 /tmp/feeds-update.log
 
             exit "${STATUS}"
           fi
 
           echo
-          echo "=============================================="
+          echo "=================================================="
           echo " Installing feeds"
-          echo "=============================================="
+          echo "=================================================="
 
-          ./scripts/feeds install -a -f 2>&1 | tee /tmp/feeds-install.log
+          ./scripts/feeds install -a -f \
+            2>&1 | tee /tmp/feeds-install.log
 
           STATUS=${PIPESTATUS[0]}
 
@@ -199,28 +220,39 @@ jobs:
           echo "feeds install exit code: ${STATUS}"
 
           if [ "${STATUS}" -ne 0 ]; then
+
             echo "::error::feeds install failed"
 
             echo
-            echo "========== FEEDS INSTALL LOG =========="
+            echo "=================================================="
+            echo " FEEDS INSTALL LOG"
+            echo "=================================================="
 
-            tail -n 500 /tmp/feeds-install.log
+            tail -n 1000 /tmp/feeds-install.log
 
             exit "${STATUS}"
           fi
 
           echo
-          echo "=============================================="
-          echo " Installed PassWall packages"
-          echo "=============================================="
+          echo "=================================================="
+          echo " PassWall packages found"
+          echo "=================================================="
 
-          find package/feeds -maxdepth 2 \
-            \( -iname '*passwall*' -o -iname '*xray*' -o -iname '*sing-box*' -o -iname '*geoview*' \) \
+          find package/feeds \
+            -maxdepth 3 \
+            \( \
+              -iname '*passwall*' \
+              -o -iname '*xray*' \
+              -o -iname '*sing-box*' \
+              -o -iname '*geoview*' \
+            \) \
             -print \
-            | sort || true
+            | sort \
+            || true
+
 
       # ============================================================
-      # Configuration
+      # Install configuration
       # ============================================================
 
       - name: Install .config
@@ -230,29 +262,36 @@ jobs:
 
           cd openwrt
 
-          echo "=============================================="
+          echo "=================================================="
           echo " Installing .config"
-          echo "=============================================="
+          echo "=================================================="
 
           cp ../.config .config
 
           echo
-          echo "========== TARGET =========="
+          echo "=================================================="
+          echo " TARGET"
+          echo "=================================================="
 
           grep -E '^CONFIG_TARGET_' .config || true
 
           echo
-          echo "========== PASSWALL =========="
+          echo "=================================================="
+          echo " PASSWALL"
+          echo "=================================================="
 
           grep -E \
             '^CONFIG_PACKAGE_(luci-app-passwall|luci-app-passwall2|xray-core|sing-box)=' \
-            .config || true
+            .config \
+            || true
 
           echo
-          echo "========== DOCKER =========="
+          echo "=================================================="
+          echo " DOCKER CHECK"
+          echo "=================================================="
 
           if grep -E \
-            '^CONFIG_PACKAGE_(docker|dockerd|dockerman|luci-app-dockerman|containerd|runc|docker-compose|docker-compose-v2)=y' \
+            '^CONFIG_PACKAGE_(docker|dockerd|dockerman|luci-app-dockerman|containerd|docker-compose|docker-compose-v2)=y' \
             .config; then
 
             echo "::error::Docker package explicitly enabled."
@@ -260,7 +299,8 @@ jobs:
             exit 1
           fi
 
-          echo "Docker packages are not explicitly enabled."
+          echo "Docker packages are disabled."
+
 
       # ============================================================
       # Defconfig
@@ -273,11 +313,12 @@ jobs:
 
           cd openwrt
 
-          echo "=============================================="
+          echo "=================================================="
           echo " Running make defconfig"
-          echo "=============================================="
+          echo "=================================================="
 
-          make defconfig 2>&1 | tee /tmp/defconfig.log
+          make defconfig \
+            2>&1 | tee /tmp/defconfig.log
 
           STATUS=${PIPESTATUS[0]}
 
@@ -289,20 +330,18 @@ jobs:
             echo "::error::make defconfig FAILED"
 
             echo
-            echo "========== LAST 500 LINES =========="
+            echo "=================================================="
+            echo " DEFCONFIG LOG"
+            echo "=================================================="
 
-            tail -n 500 /tmp/defconfig.log
-
-            echo
-            echo "========== CONFIG TARGET =========="
-
-            grep -E '^CONFIG_TARGET_' .config || true
+            tail -n 1000 /tmp/defconfig.log
 
             exit "${STATUS}"
           fi
 
           echo
           echo "make defconfig completed successfully."
+
 
       # ============================================================
       # Validate final configuration
@@ -315,63 +354,56 @@ jobs:
 
           cd openwrt
 
-          echo "=============================================="
-          echo " Final configuration"
-          echo "=============================================="
+          echo "=================================================="
+          echo " FINAL CONFIGURATION"
+          echo "=================================================="
 
           echo
-          echo "========== TARGET =========="
-
+          echo "TARGET:"
           grep -E \
             '^CONFIG_TARGET_armsr|^CONFIG_TARGET_ROOTFS' \
             .config \
             || true
 
           echo
-          echo "========== PASSWALL =========="
-
+          echo "PASSWALL:"
           grep -E \
             '^CONFIG_PACKAGE_(luci-app-passwall|luci-app-passwall2|xray-core|sing-box)=' \
             .config \
             || true
 
           echo
-          echo "========== PPPoE =========="
-
+          echo "PPPoE:"
           grep -E \
             '^CONFIG_PACKAGE_(ppp|ppp-mod-pppoe|kmod-pppoe|luci-proto-ppp)=' \
             .config \
             || true
 
           echo
-          echo "========== IPV6 =========="
-
+          echo "IPv6:"
           grep -E \
             '^CONFIG_PACKAGE_(ipv6helper|odhcp6c|odhcpd-ipv6only|luci-proto-ipv6)=' \
             .config \
             || true
 
           echo
-          echo "========== WIREGUARD =========="
-
+          echo "WireGuard:"
           grep -E \
             '^CONFIG_PACKAGE_(kmod-wireguard|wireguard-tools|luci-app-wireguard|luci-proto-wireguard)=' \
             .config \
             || true
 
           echo
-          echo "========== ZEROTIER =========="
-
+          echo "ZeroTier:"
           grep -E \
             '^CONFIG_PACKAGE_(zerotier|luci-app-zerotier)=' \
             .config \
             || true
 
           echo
-          echo "========== DOCKER CHECK =========="
-
+          echo "Docker:"
           if grep -E \
-            '^CONFIG_PACKAGE_(docker|dockerd|dockerman|luci-app-dockerman|containerd|runc|docker-compose|docker-compose-v2)=y' \
+            '^CONFIG_PACKAGE_(docker|dockerd|dockerman|luci-app-dockerman|containerd|docker-compose|docker-compose-v2)=y' \
             .config; then
 
             echo "::error::Docker-related package unexpectedly enabled."
@@ -381,8 +413,9 @@ jobs:
 
           echo "Docker packages disabled."
 
+
       # ============================================================
-      # Download sources
+      # Download source packages
       # ============================================================
 
       - name: Download OpenWrt sources
@@ -392,9 +425,9 @@ jobs:
 
           cd openwrt
 
-          echo "=============================================="
+          echo "=================================================="
           echo " Downloading OpenWrt sources"
-          echo "=============================================="
+          echo "=================================================="
 
           make download \
             -j"$(nproc)" \
@@ -411,36 +444,49 @@ jobs:
             echo "::error::make download FAILED"
 
             echo
-            echo "========== LAST 500 LINES =========="
-
-            tail -n 500 /tmp/download.log
-
-            echo
-            echo "========== DOWNLOAD ERRORS =========="
+            echo "=================================================="
+            echo " DOWNLOAD ERRORS"
+            echo "=================================================="
 
             grep -nEi \
               'error:|fatal:|failed|cannot|timeout|404|403|checksum|hash mismatch' \
               /tmp/download.log \
-              | tail -n 200 \
+              | tail -n 300 \
               || true
+
+            echo
+            echo "=================================================="
+            echo " LAST 1000 DOWNLOAD LOG LINES"
+            echo "=================================================="
+
+            tail -n 1000 /tmp/download.log
 
             exit "${STATUS}"
           fi
 
+
       # ============================================================
-      # Build
+      # Diagnostic build
+      #
+      # IMPORTANT:
+      # First successful build must use -j1.
+      # This makes the first real package error visible.
       # ============================================================
 
-      - name: Build OpenWrt
+      - name: Build OpenWrt - diagnostic mode
         shell: bash
         run: |
           set +e
 
           cd openwrt
 
-          echo "=============================================="
-          echo " Starting OpenWrt build"
-          echo "=============================================="
+          echo "=================================================="
+          echo " STARTING OPENWRT BUILD"
+          echo "=================================================="
+
+          echo
+          echo "Build mode:"
+          echo "  make -j1 world V=s"
 
           echo
           echo "CPU:"
@@ -462,50 +508,75 @@ jobs:
             || true
 
           echo
-          echo "=============================================="
-          echo " make world"
-          echo "=============================================="
+          echo "=================================================="
+          echo " MAKE WORLD"
+          echo "=================================================="
 
-          make -j"$(nproc)" world V=s \
+          make -j1 world V=s \
             2>&1 | tee /tmp/openwrt-build.log
 
           STATUS=${PIPESTATUS[0]}
 
           echo
-          echo "OpenWrt build exit code: ${STATUS}"
+          echo "=================================================="
+          echo " BUILD EXIT CODE: ${STATUS}"
+          echo "=================================================="
 
           if [ "${STATUS}" -ne 0 ]; then
 
             echo "::error::OpenWrt compilation FAILED"
 
             echo
-            echo "=============================================="
-            echo " LAST 500 BUILD LOG LINES"
-            echo "=============================================="
-
-            tail -n 500 /tmp/openwrt-build.log
-
-            echo
-            echo "=============================================="
-            echo " ERROR SEARCH"
-            echo "=============================================="
+            echo "=================================================="
+            echo " FIRST LIKELY ERROR LINES"
+            echo "=================================================="
 
             grep -nEi \
-              'error:|fatal:|failed|cannot find|no rule to make|undefined reference|dependency|cannot compile|recipe for target|collected errors|pkg_hash_check_unresolved' \
+              '(^|[[:space:]])error(:|[[:space:]])|fatal:|failed|cannot find|no rule to make|undefined reference|cannot compile|recipe for target|collected errors|pkg_hash_check_unresolved|dependency|not found|No such file' \
+              /tmp/openwrt-build.log \
+              | head -n 150 \
+              || true
+
+            echo
+            echo "=================================================="
+            echo " MAKE FAILURE LINES"
+            echo "=================================================="
+
+            grep -nE \
+              'make(\[[0-9]+\])?: \*\*\*|Error [0-9]+$' \
+              /tmp/openwrt-build.log \
+              | tail -n 150 \
+              || true
+
+            echo
+            echo "=================================================="
+            echo " PACKAGE COMPILE FAILURE CONTEXT"
+            echo "=================================================="
+
+            grep -nEi \
+              'package/feeds/|package/libs/|package/network/|package/system/|package/firmware/' \
               /tmp/openwrt-build.log \
               | tail -n 250 \
               || true
+
+            echo
+            echo "=================================================="
+            echo " LAST 1500 BUILD LOG LINES"
+            echo "=================================================="
+
+            tail -n 1500 /tmp/openwrt-build.log
 
             exit "${STATUS}"
           fi
 
           echo
-          echo "=============================================="
-          echo " OpenWrt compilation completed successfully"
-          echo "=============================================="
+          echo "=================================================="
+          echo " OPENWRT COMPILATION SUCCESS"
+          echo "=================================================="
+
 
       # ============================================================
-      # Verify output
+      # Verify rootfs
       # ============================================================
 
       - name: Verify OpenWrt rootfs
@@ -515,9 +586,9 @@ jobs:
 
           cd openwrt
 
-          echo "=============================================="
-          echo " Checking OpenWrt output"
-          echo "=============================================="
+          echo "=================================================="
+          echo " VERIFYING OPENWRT OUTPUT"
+          echo "=================================================="
 
           test -d bin/targets/armsr/armv8
 
@@ -546,6 +617,7 @@ jobs:
             | head -n 1)
 
           if [ -z "${ROOTFS}" ]; then
+
             echo "::error::No armsr/armv8 rootfs.tar.gz found."
 
             exit 1
@@ -560,36 +632,38 @@ jobs:
 
           sha256sum "${ROOTFS}"
 
-      # ============================================================
-      # Flippy N1 packaging
-      # ============================================================
-
-      - name: Package Phicomm N1 S905D with Flippy
-        uses: ophub/flippy-openwrt-actions@main
-        env:
-          OPENWRT_ARMSR: openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz
-
-          PACKAGE_SOC: s905d
-
-          KERNEL_REPO_URL: breakingbadboy/OpenWrt
-
-          KERNEL_VERSION_NAME: 6.12.y
-
-          KERNEL_AUTO_LATEST: true
-
-          OPENWRT_IP: 192.168.1.1
 
       # ============================================================
-      # Show output
+      # Package N1 using official OHub Amlogic packager
+      #
+      # armsr/armv8 generic rootfs
+      #          ↓
+      #       s905d
+      #          ↓
+      #      Phicomm N1
+      # ============================================================
+
+      - name: Package Phicomm N1 S905D
+        uses: ophub/amlogic-s9xxx-openwrt@main
+        with:
+          openwrt_path: openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz
+          openwrt_board: s905d
+          openwrt_kernel: 6.12.y_6.18.y
+          auto_kernel: true
+          openwrt_ip: 192.168.1.1
+
+
+      # ============================================================
+      # Show final output
       # ============================================================
 
       - name: Show final firmware
         if: always()
         shell: bash
         run: |
-          echo "=============================================="
+          echo "=================================================="
           echo " FINAL OUTPUT"
-          echo "=============================================="
+          echo "=================================================="
 
           echo
           echo "========== OpenWrt =========="
@@ -603,9 +677,9 @@ jobs:
             || true
 
           echo
-          echo "========== Flippy =========="
+          echo "========== OHub / Flippy =========="
 
-          find /opt/openwrt_packit/output \
+          find openwrt/out \
             -maxdepth 1 \
             -type f \
             -printf '%f %s bytes\n' \
@@ -613,8 +687,9 @@ jobs:
             | sort \
             || true
 
+
       # ============================================================
-      # Upload logs
+      # Upload all diagnostic logs
       # ============================================================
 
       - name: Upload build logs
@@ -631,6 +706,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+
       # ============================================================
       # Upload OpenWrt rootfs
       # ============================================================
@@ -644,6 +720,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+
       # ============================================================
       # Upload N1 firmware
       # ============================================================
@@ -653,6 +730,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: phicomm-n1-openwrt-24.10.8
-          path: /opt/openwrt_packit/output/*
+          path: openwrt/out/*
           if-no-files-found: error
           retention-days: 14
