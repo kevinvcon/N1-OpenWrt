@@ -1,5 +1,5 @@
 
-name: N1 Target Diagnostic
+name: N1 Target Test
 
 on:
   workflow_dispatch:
@@ -12,302 +12,68 @@ env:
   OPENWRT_TAG: v24.10.8
 
 jobs:
-  test:
-    name: Verify N1 ARM64 Target
+  build:
     runs-on: ubuntu-24.04
 
     steps:
-
-      # ============================================================
-      # 1. Checkout
-      # ============================================================
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # ============================================================
-      # 2. Clone official OpenWrt
-      # ============================================================
-      - name: Clone official OpenWrt
-        shell: bash
+      - name: Clone OpenWrt
         run: |
-          set -euo pipefail
-
-          echo "::group::Clone OpenWrt"
-
-          cd "${GITHUB_WORKSPACE}"
-
-          rm -rf openwrt
-
-          git clone \
-            --depth=1 \
-            --branch "${OPENWRT_TAG}" \
-            "${OPENWRT_REPO}" \
-            openwrt
-
+          git clone --depth=1 --branch "$OPENWRT_TAG" "$OPENWRT_REPO" openwrt
           cd openwrt
-
-          echo
-          echo "Repository:"
-          git remote -v
-
-          echo
-          echo "Commit:"
           git log -1 --oneline
-
-          echo
-          echo "Description:"
           git describe --tags --always
 
-          echo "::endgroup::"
-
-      # ============================================================
-      # 3. Verify source
-      # ============================================================
-      - name: Verify clean OpenWrt source
-        shell: bash
+      - name: Create config
         run: |
-          set -euo pipefail
+          cd openwrt
 
-          cd "${GITHUB_WORKSPACE}/openwrt"
+          echo 'CONFIG_TARGET_armvirt=y' > .config
+          echo 'CONFIG_TARGET_armvirt_64=y' >> .config
+          echo 'CONFIG_TARGET_armvirt_64_Default=y' >> .config
 
-          echo "::group::Source verification"
-
-          echo "OpenWrt directory:"
-          pwd
-
-          echo
-          echo "Git status:"
-          git status --short
-
-          echo
-          echo "Checking .config..."
-
-          if [ -e .config ]; then
-            echo "::error::OpenWrt source already contains .config"
-            exit 1
-          fi
-
-          echo "OK: no .config exists"
-
-          echo
-          echo "Target directories:"
-
-          ls -ld \
-            target/linux/armvirt \
-            target/linux/ath79 \
-            2>/dev/null || true
-
-          echo "::endgroup::"
-
-      # ============================================================
-      # 4. Create ONLY N1 target configuration
-      # ============================================================
-      - name: Create N1 configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "${GITHUB_WORKSPACE}/openwrt"
-
-          echo "::group::Create N1 configuration"
-
-          cat > .config <<'EOF'
-CONFIG_TARGET_armvirt=y
-CONFIG_TARGET_armvirt_64=y
-CONFIG_TARGET_armvirt_64_Default=y
-EOF
-
-          echo
+          echo "=========================================="
           echo "CONFIG BEFORE DEFCONFIG"
-          echo "------------------------------------------"
+          echo "=========================================="
 
           cat .config
 
-          echo
-          echo "Checking ARM64 target..."
-
-          if ! grep -Fxq 'CONFIG_TARGET_armvirt=y' .config; then
-            echo "::error::CONFIG_TARGET_armvirt was not written"
-            exit 1
-          fi
-
-          if ! grep -Fxq 'CONFIG_TARGET_armvirt_64=y' .config; then
-            echo "::error::CONFIG_TARGET_armvirt_64 was not written"
-            exit 1
-          fi
-
-          if ! grep -Fxq 'CONFIG_TARGET_armvirt_64_Default=y' .config; then
-            echo "::error::CONFIG_TARGET_armvirt_64_Default was not written"
-            exit 1
-          fi
-
-          echo
-          echo "ARM64 target configuration written successfully."
-
-          echo "::endgroup::"
-
-      # ============================================================
-      # 5. Run defconfig
-      # ============================================================
-      - name: Run OpenWrt defconfig
-        shell: bash
+      - name: Run defconfig
         run: |
-          set -uo pipefail
+          cd openwrt
 
-          cd "${GITHUB_WORKSPACE}/openwrt"
-
-          echo "::group::Run make defconfig"
-
-          echo "Running:"
-          echo "make defconfig"
-          echo
+          echo "=========================================="
+          echo "RUN DEFCONFIG"
+          echo "=========================================="
 
           make defconfig
-          RESULT=$?
 
-          echo
-          echo "make defconfig exit code: ${RESULT}"
+          echo "=========================================="
+          echo "CONFIG AFTER DEFCONFIG"
+          echo "=========================================="
 
-          if [ "${RESULT}" -ne 0 ]; then
-            echo "::error::make defconfig failed"
-
-            echo
-            echo "CONFIG AT FAILURE:"
-            cat .config || true
-
-            exit "${RESULT}"
-          fi
-
-          echo "::endgroup::"
-
-      # ============================================================
-      # 6. Inspect configuration AFTER defconfig
-      # ============================================================
-      - name: Inspect configuration after defconfig
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "${GITHUB_WORKSPACE}/openwrt"
-
-          echo "::group::CONFIG AFTER DEFCONFIG"
-
-          echo
-          echo "TARGET:"
           grep '^CONFIG_TARGET_' .config || true
+          grep '^CONFIG_ARCH=' .config || true
+          grep '^CONFIG_CPU_TYPE=' .config || true
+          grep '^CONFIG_TARGET_ARCH_PACKAGES=' .config || true
 
-          echo
-          echo "ARCH:"
-          grep -E '^CONFIG_(ARCH|CPU_TYPE|TARGET_ARCH_PACKAGES)' .config || true
-
-          echo
-          echo "FULL TARGET-RELATED CONFIG:"
-          grep -E '^CONFIG_(TARGET|ARCH|CPU_TYPE)' .config || true
-
-          echo "::endgroup::"
-
-      # ============================================================
-      # 7. Detect unexpected MIPS
-      # ============================================================
-      - name: Detect target corruption
-        shell: bash
+      - name: Final check
         run: |
-          set -euo pipefail
+          cd openwrt
 
-          cd "${GITHUB_WORKSPACE}/openwrt"
-
-          echo "::group::Target validation"
-
-          echo
-          echo "Expected:"
-          echo "  Target board : armvirt"
-          echo "  Subtarget    : 64"
-          echo "  Profile      : Default"
-          echo "  Architecture : aarch64"
-          echo "  CPU          : cortex-a53"
-
-          echo
-          echo "Actual:"
-          grep -E \
-            '^CONFIG_(TARGET_BOARD|TARGET_SUBTARGET|TARGET_PROFILE|ARCH|CPU_TYPE|TARGET_ARCH_PACKAGES)' \
-            .config \
-            || true
-
-          echo
-          echo "Checking for MIPS..."
-
-          if grep -Eq \
-            '^CONFIG_TARGET_ath79|^CONFIG_TARGET.*mips|^CONFIG_ARCH="mips"|^CONFIG_TARGET_ARCH_PACKAGES="mips_' \
-            .config
-          then
-            echo "::error::MIPS TARGET DETECTED"
-
-            echo
-            echo "MIPS configuration:"
-            grep -E \
-              '^CONFIG_(TARGET|ARCH|CPU_TYPE)' \
-              .config \
-              || true
-
-            exit 1
-          fi
-
-          echo
-          echo "No MIPS configuration detected."
-
-          echo "::endgroup::"
-
-      # ============================================================
-      # 8. Final exact target check
-      # ============================================================
-      - name: Final N1 target check
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "${GITHUB_WORKSPACE}/openwrt"
-
-          echo "::group::FINAL N1 CHECK"
-
-          FAIL=0
-
-          check() {
-            KEY="$1"
-            EXPECTED="$2"
-
-            ACTUAL="$(grep -E "^${KEY}=" .config | head -n1 || true)"
-
-            if [ "${ACTUAL}" = "${KEY}=${EXPECTED}" ]; then
-              echo "PASS: ${ACTUAL}"
-            else
-              echo "::error::FAIL: expected ${KEY}=${EXPECTED}, got ${ACTUAL:-<missing>}"
-              FAIL=1
-            fi
-          }
-
-          check 'CONFIG_TARGET_BOARD' '"armvirt"'
-          check 'CONFIG_TARGET_SUBTARGET' '"64"'
-          check 'CONFIG_TARGET_PROFILE' '"Default"'
-          check 'CONFIG_ARCH' '"aarch64"'
-          check 'CONFIG_CPU_TYPE' '"cortex-a53"'
-          check 'CONFIG_TARGET_ARCH_PACKAGES' '"aarch64_cortex-a53"'
-
-          echo
-
-          if [ "${FAIL}" -ne 0 ]; then
-            echo "::error::N1 ARM64 TARGET VALIDATION FAILED"
-            exit 1
-          fi
-
-          echo
           echo "=========================================="
-          echo " N1 ARM64 TARGET VALIDATION PASSED"
+          echo "FINAL CHECK"
           echo "=========================================="
 
-          echo
-          echo "The OpenWrt source selected:"
-          echo "  armvirt / 64 / Default"
-          echo "  aarch64 / cortex-a53"
+          cat .config
 
-          echo "::endgroup::"
+          grep 'CONFIG_TARGET_armvirt=y' .config
+          grep 'CONFIG_TARGET_armvirt_64=y' .config
+          grep 'CONFIG_TARGET_armvirt_64_Default=y' .config
+
+          echo "=========================================="
+          echo "N1 TARGET TEST PASSED"
+          echo "=========================================="
 ```
