@@ -6,6 +6,7 @@ on:
 permissions:
   contents: read
 
+
 env:
   OPENWRT_REPO: https://github.com/openwrt/openwrt.git
   OPENWRT_TAG: v24.10.8
