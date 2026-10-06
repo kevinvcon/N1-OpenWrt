@@ -1,79 +1,37 @@
-
-name: N1 Target Test
+name: Build Phicomm N1 OpenWrt 24.10.8
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
-  OPENWRT_REPO: https://github.com/openwrt/openwrt.git
-  OPENWRT_TAG: v24.10.8
+  OPENWRT_VERSION: "v24.10.8"
+  OPENWRT_REPO: "https://github.com/openwrt/openwrt.git"
 
 jobs:
   build:
+    name: Build armsr/armv8 for Phicomm N1
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout
+
+      # =========================================================
+      # 1. Checkout
+      # =========================================================
+
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Clone OpenWrt
+      # =========================================================
+      # 2. Prepare build environment
+      # =========================================================
+
+      - name: Prepare build environment
+        shell: bash
         run: |
-          git clone --depth=1 --branch "$OPENWRT_TAG" "$OPENWRT_REPO" openwrt
-          cd openwrt
-          git log -1 --oneline
-          git describe --tags --always
+          set -euxo pipefail
 
-      - name: Create config
-        run: |
-          cd openwrt
-
-          echo 'CONFIG_TARGET_armvirt=y' > .config
-          echo 'CONFIG_TARGET_armvirt_64=y' >> .config
-          echo 'CONFIG_TARGET_armvirt_64_Default=y' >> .config
-
-          echo "=========================================="
-          echo "CONFIG BEFORE DEFCONFIG"
-          echo "=========================================="
-
-          cat .config
-
-      - name: Run defconfig
-        run: |
-          cd openwrt
-
-          echo "=========================================="
-          echo "RUN DEFCONFIG"
-          echo "=========================================="
-
-          make defconfig
-
-          echo "=========================================="
-          echo "CONFIG AFTER DEFCONFIG"
-          echo "=========================================="
-
-          grep '^CONFIG_TARGET_' .config || true
-          grep '^CONFIG_ARCH=' .config || true
-          grep '^CONFIG_CPU_TYPE=' .config || true
-          grep '^CONFIG_TARGET_ARCH_PACKAGES=' .config || true
-
-      - name: Final check
-        run: |
-          cd openwrt
-
-          echo "=========================================="
-          echo "FINAL CHECK"
-          echo "=========================================="
-
-          cat .config
-
-          grep 'CONFIG_TARGET_armvirt=y' .config
-          grep 'CONFIG_TARGET_armvirt_64=y' .config
-          grep 'CONFIG_TARGET_armvirt_64_Default=y' .config
-
-          echo "=========================================="
-          echo "N1 TARGET TEST PASSED"
-          echo "=========================================="
-
+          echo "=============================================="
+          echo " Preparing Ubuntu
