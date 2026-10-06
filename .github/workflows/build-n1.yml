@@ -1,0 +1,357 @@
+name: Test Phicomm N1 OpenWrt
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  OPENWRT_REPO: https://github.com/openwrt/openwrt.git
+  OPENWRT_TAG: v24.10.8
+
+jobs:
+  build:
+    name: N1 armvirt/64 ARM64
+    runs-on: ubuntu-24.04
+
+    steps:
+
+      # ==========================================================
+      # 1. Checkout
+      # ==========================================================
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ==========================================================
+      # 2. Show repository
+      # ==========================================================
+
+      - name: Show repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=================================================="
+          echo " REPOSITORY CONTENT"
+          echo "=================================================="
+
+          pwd
+
+          find "${GITHUB_WORKSPACE}" \
+            -maxdepth 4 \
+            -type f \
+            | sort
+
+      # ==========================================================
+      # 3. Install build dependencies
+      # ==========================================================
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            clang \
+            flex \
+            bison \
+            gawk \
+            gcc \
+            g++ \
+            git \
+            gettext \
+            libncurses-dev \
+            libssl-dev \
+            python3 \
+            python3-dev \
+            python3-pip \
+            python3-setuptools \
+            python3-wheel \
+            rsync \
+            unzip \
+            zlib1g-dev \
+            file \
+            wget \
+            curl \
+            subversion \
+            swig \
+            time \
+            xsltproc \
+            libxml-parser-perl \
+            libelf-dev \
+            libdw-dev \
+            help2man \
+            autoconf \
+            automake \
+            autopoint \
+            libtool \
+            pkg-config \
+            device-tree-compiler \
+            quilt \
+            ccache \
+            dos2unix
+
+      # ==========================================================
+      # 4. Clone CLEAN OpenWrt
+      # ==========================================================
+
+      - name: Clone OpenWrt
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "${GITHUB_WORKSPACE}"
+
+          rm -rf openwrt
+
+          echo "=================================================="
+          echo " CLONING OPENWRT"
+          echo "=================================================="
+
+          git clone \
+            --depth=1 \
+            --branch "${OPENWRT_TAG}" \
+            "${OPENWRT_REPO}" \
+            openwrt
+
+          cd openwrt
+
+          echo
+          echo "OpenWrt commit:"
+          git log -1 --oneline
+
+          echo
+          echo "OpenWrt version:"
+          git describe --tags --always
+
+      # ==========================================================
+      # 5. Configure official feeds
+      # ==========================================================
+
+      - name: Configure feeds
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "${GITHUB_WORKSPACE}/openwrt"
+
+          rm -f feeds.conf.default
+
+          cp \
+            "${GITHUB_WORKSPACE}/feeds.conf.default" \
+            feeds.conf.default
+
+          echo "=================================================="
+          echo " FEEDS"
+          echo "=================================================="
+
+          cat feeds.conf.default
+
+          echo
+          echo "Updating feeds..."
+
+          ./scripts/feeds update -a
+
+          echo
+          echo "Installing feeds..."
+
+          ./scripts/feeds install -a
+
+      # ==========================================================
+      # 6. Create N1 configuration from ZERO
+      # ==========================================================
+
+      - name: Create N1 configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "${GITHUB_WORKSPACE}/openwrt"
+
+          echo "=================================================="
+          echo " CREATE N1 CONFIGURATION"
+          echo "=================================================="
+
+          rm -f .config
+
+          cat > .config <<'EOF'
+          CONFIG_TARGET_armvirt=y
+          CONFIG_TARGET_armvirt_64=y
+          CONFIG_TARGET_armvirt_64_Default=y
+          EOF
+
+          echo
+          echo "Configuration BEFORE defconfig:"
+          cat .config
+
+          echo
+          echo "Checking target..."
+
+          grep -Fxq 'CONFIG_TARGET_armvirt=y' .config
+          grep -Fxq 'CONFIG_TARGET_armvirt_64=y' .config
+          grep -Fxq 'CONFIG_TARGET_armvirt_64_Default=y' .config
+
+          echo
+          echo "N1 target configuration created successfully."
+
+      # ==========================================================
+      # 7. Run defconfig
+      # ==========================================================
+
+      - name: Run defconfig
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "${GITHUB_WORKSPACE}/openwrt"
+
+          echo "=================================================="
+          echo " MAKE DEFCONFIG"
+          echo "=================================================="
+
+          make defconfig
+
+          echo
+          echo "Configuration AFTER defconfig:"
+
+          grep -E \
+            '^CONFIG_(TARGET|ARCH|CPU_TYPE)' \
+            .config \
+            || true
+
+      # ==========================================================
+      # 8. Validate N1 target
+      # ==========================================================
+
+      - name: Validate N1 target
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "${GITHUB_WORKSPACE}/openwrt"
+
+          echo
+          echo "=================================================="
+          echo " N1 TARGET VALIDATION"
+          echo "=================================================="
+
+          echo
+          echo "[ TARGET ]"
+
+          grep -E '^CONFIG_TARGET_' .config || true
+
+          echo
+          echo "[ ARCHITECTURE ]"
+
+          grep -E \
+            '^CONFIG_(ARCH|CPU_TYPE|TARGET_ARCH_PACKAGES)' \
+            .config \
+            || true
+
+          echo
+          echo "[ REQUIRED ]"
+
+          REQUIRED=(
+            'CONFIG_TARGET_armvirt=y'
+            'CONFIG_TARGET_armvirt_64=y'
+            'CONFIG_TARGET_armvirt_64_Default=y'
+            'CONFIG_TARGET_BOARD="armvirt"'
+            'CONFIG_TARGET_SUBTARGET="64"'
+            'CONFIG_TARGET_PROFILE="Default"'
+            'CONFIG_TARGET_ARCH_PACKAGES="aarch64_cortex-a53"'
+            'CONFIG_CPU_TYPE="cortex-a53"'
+            'CONFIG_ARCH="aarch64"'
+          )
+
+          for item in "${REQUIRED[@]}"; do
+            if ! grep -Fxq "${item}" .config; then
+              echo
+              echo "=================================================="
+              echo " FATAL: WRONG TARGET"
+              echo "=================================================="
+
+              echo
+              echo "Missing:"
+              echo "${item}"
+
+              echo
+              echo "Actual configuration:"
+
+              grep -E \
+                '^CONFIG_(TARGET|ARCH|CPU)' \
+                .config \
+                || true
+
+              exit 1
+            fi
+          done
+
+          echo
+          echo "[ NEGATIVE CHECK ]"
+
+          if grep -Eq \
+            '^CONFIG_TARGET_ath79|^CONFIG_TARGET.*mips|^CONFIG_ARCH="mips"|^CONFIG_TARGET_ARCH_PACKAGES="mips_' \
+            .config
+          then
+
+            echo
+            echo "=================================================="
+            echo " FATAL: MIPS / ATH79 DETECTED"
+            echo "=================================================="
+
+            grep -E \
+              '^CONFIG_(TARGET|ARCH|CPU)' \
+              .config \
+              || true
+
+            exit 1
+          fi
+
+          if grep -Fqi 'Carambola2' .config; then
+            echo
+            echo "FATAL: Carambola2 detected."
+            exit 1
+          fi
+
+          echo
+          echo "=================================================="
+          echo " N1 TARGET VALIDATION PASSED"
+          echo "=================================================="
+
+      # ==========================================================
+      # 9. Show final configuration
+      # ==========================================================
+
+      - name: Show final configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "${GITHUB_WORKSPACE}/openwrt"
+
+          echo
+          echo "=================================================="
+          echo " FINAL CONFIGURATION"
+          echo "=================================================="
+
+          echo
+          echo "[ TARGET ]"
+
+          grep -E '^CONFIG_TARGET_' .config
+
+          echo
+          echo "[ ARCHITECTURE ]"
+
+          grep -E \
+            '^CONFIG_(ARCH|CPU_TYPE|TARGET_ARCH_PACKAGES)' \
+            .config
+
+          echo
+          echo "=================================================="
+          echo " TEST PASSED"
+          echo "=================================================="
