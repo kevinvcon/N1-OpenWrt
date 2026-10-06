@@ -1,4 +1,4 @@
-```yaml
+
 name: N1 Target Diagnostic
 
 on:
@@ -180,5 +180,134 @@ EOF
 
           echo "::endgroup::"
 
-      # ===================================================
+      # ============================================================
+      # 6. Inspect configuration AFTER defconfig
+      # ============================================================
+      - name: Inspect configuration after defconfig
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "${GITHUB_WORKSPACE}/openwrt"
+
+          echo "::group::CONFIG AFTER DEFCONFIG"
+
+          echo
+          echo "TARGET:"
+          grep '^CONFIG_TARGET_' .config || true
+
+          echo
+          echo "ARCH:"
+          grep -E '^CONFIG_(ARCH|CPU_TYPE|TARGET_ARCH_PACKAGES)' .config || true
+
+          echo
+          echo "FULL TARGET-RELATED CONFIG:"
+          grep -E '^CONFIG_(TARGET|ARCH|CPU_TYPE)' .config || true
+
+          echo "::endgroup::"
+
+      # ============================================================
+      # 7. Detect unexpected MIPS
+      # ============================================================
+      - name: Detect target corruption
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "${GITHUB_WORKSPACE}/openwrt"
+
+          echo "::group::Target validation"
+
+          echo
+          echo "Expected:"
+          echo "  Target board : armvirt"
+          echo "  Subtarget    : 64"
+          echo "  Profile      : Default"
+          echo "  Architecture : aarch64"
+          echo "  CPU          : cortex-a53"
+
+          echo
+          echo "Actual:"
+          grep -E \
+            '^CONFIG_(TARGET_BOARD|TARGET_SUBTARGET|TARGET_PROFILE|ARCH|CPU_TYPE|TARGET_ARCH_PACKAGES)' \
+            .config \
+            || true
+
+          echo
+          echo "Checking for MIPS..."
+
+          if grep -Eq \
+            '^CONFIG_TARGET_ath79|^CONFIG_TARGET.*mips|^CONFIG_ARCH="mips"|^CONFIG_TARGET_ARCH_PACKAGES="mips_' \
+            .config
+          then
+            echo "::error::MIPS TARGET DETECTED"
+
+            echo
+            echo "MIPS configuration:"
+            grep -E \
+              '^CONFIG_(TARGET|ARCH|CPU_TYPE)' \
+              .config \
+              || true
+
+            exit 1
+          fi
+
+          echo
+          echo "No MIPS configuration detected."
+
+          echo "::endgroup::"
+
+      # ============================================================
+      # 8. Final exact target check
+      # ============================================================
+      - name: Final N1 target check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "${GITHUB_WORKSPACE}/openwrt"
+
+          echo "::group::FINAL N1 CHECK"
+
+          FAIL=0
+
+          check() {
+            KEY="$1"
+            EXPECTED="$2"
+
+            ACTUAL="$(grep -E "^${KEY}=" .config | head -n1 || true)"
+
+            if [ "${ACTUAL}" = "${KEY}=${EXPECTED}" ]; then
+              echo "PASS: ${ACTUAL}"
+            else
+              echo "::error::FAIL: expected ${KEY}=${EXPECTED}, got ${ACTUAL:-<missing>}"
+              FAIL=1
+            fi
+          }
+
+          check 'CONFIG_TARGET_BOARD' '"armvirt"'
+          check 'CONFIG_TARGET_SUBTARGET' '"64"'
+          check 'CONFIG_TARGET_PROFILE' '"Default"'
+          check 'CONFIG_ARCH' '"aarch64"'
+          check 'CONFIG_CPU_TYPE' '"cortex-a53"'
+          check 'CONFIG_TARGET_ARCH_PACKAGES' '"aarch64_cortex-a53"'
+
+          echo
+
+          if [ "${FAIL}" -ne 0 ]; then
+            echo "::error::N1 ARM64 TARGET VALIDATION FAILED"
+            exit 1
+          fi
+
+          echo
+          echo "=========================================="
+          echo " N1 ARM64 TARGET VALIDATION PASSED"
+          echo "=========================================="
+
+          echo
+          echo "The OpenWrt source selected:"
+          echo "  armvirt / 64 / Default"
+          echo "  aarch64 / cortex-a53"
+
+          echo "::endgroup::"
 ```
