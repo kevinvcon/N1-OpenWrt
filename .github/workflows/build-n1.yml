@@ -17,7 +17,7 @@ build:
 name: OpenWrt 24.10.8 armvirt64 N1
 runs-on: ubuntu-24.04
 
-````
+
 steps:
 
   - name: Checkout configuration
