@@ -1,886 +1,641 @@
-name: Build Phicomm N1 OpenWrt 24.10.8
+
+name: Build N1 OpenWrt 24.10.8
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   OPENWRT_REPO: https://github.com/openwrt/openwrt.git
   OPENWRT_TAG: v24.10.8
+  OPENWRT_DIR: ${{ github.workspace }}/openwrt
+  LOG_DIR: ${{ github.workspace }}/build-logs
 
 jobs:
-
   build:
-
-    name: Build OpenWrt 24.10.8 armsr/armv8
-
+    name: Build OpenWrt 24.10.8 armvirt/64 for N1
     runs-on: ubuntu-24.04
 
     steps:
 
-      # ============================================================
-      # 1. Checkout GitHub repository
-      # ============================================================
-
-      - name: Checkout build repository
+      # ==========================================================
+      # 1. Checkout user repository
+      # ==========================================================
+      - name: Checkout configuration repository
         uses: actions/checkout@v4
 
-      # ============================================================
-      # 2. Install build dependencies
-      # ============================================================
-
-      - name: Install build dependencies
+      # ==========================================================
+      # 2. Prepare build environment
+      # ==========================================================
+      - name: Prepare Ubuntu build environment
         shell: bash
         run: |
           set -euxo pipefail
 
           sudo apt-get update
 
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          sudo apt-get install -y \
             build-essential \
             clang \
             flex \
             bison \
             gawk \
-            gcc \
-            g++ \
-            git \
             gettext \
-            gettext-base \
+            git \
             libncurses-dev \
             libssl-dev \
-            libelf-dev \
-            libdw-dev \
-            zlib1g-dev \
+            python3 \
+            python3-pip \
+            python3-setuptools \
+            python3-wheel \
             rsync \
             unzip \
             wget \
             curl \
             file \
-            help2man \
-            bc \
-            pkg-config \
-            time \
-            xsltproc \
-            subversion \
-            ccache \
             zstd \
-            device-tree-compiler \
-            qemu-utils \
-            python3 \
-            python3-setuptools \
-            python3-venv \
-            perl \
-            tar \
+            xz-utils \
             gzip \
             bzip2 \
-            xz-utils
+            tar \
+            ccache \
+            swig \
+            time \
+            help2man \
+            libelf-dev \
+            libdw-dev \
+            elfutils \
+            pkg-config \
+            autoconf \
+            automake \
+            libtool \
+            device-tree-compiler \
+            qemu-utils
 
           echo "============================================================"
-          echo "HOST INFORMATION"
+          echo "HOST TOOL VERSIONS"
           echo "============================================================"
 
-          uname -a
-
-          echo
-          echo "===== GCC ====="
           gcc --version
-
-          echo
-          echo "===== G++ ====="
-          g++ --version
-
-          echo
-          echo "===== MAKE ====="
           make --version
-
-          echo
-          echo "===== PYTHON ====="
           python3 --version
+          git --version
+          help2man --version || true
+          pkg-config --version
 
-          echo
-          echo "===== GO ====="
-          go version || true
+      # ==========================================================
+      # 3. Create persistent log directory
+      # ==========================================================
+      - name: Initialize persistent build logs
+        shell: bash
+        run: |
+          set -eux
 
-      # ============================================================
-      # 3. Clone official OpenWrt 24.10.8
-      # ============================================================
+          mkdir -p "${LOG_DIR}"
 
+          {
+            echo "Build started:"
+            date -u
+            echo
+            echo "Runner:"
+            uname -a
+            echo
+            echo "CPU:"
+            nproc
+            echo
+            echo "Memory:"
+            free -h
+            echo
+            echo "Disk:"
+            df -h
+          } | tee "${LOG_DIR}/environment.txt"
+
+      # ==========================================================
+      # 4. Clone exact OpenWrt release
+      # ==========================================================
       - name: Clone OpenWrt 24.10.8
         shell: bash
         run: |
           set -euxo pipefail
 
-          rm -rf openwrt
+          rm -rf "${OPENWRT_DIR}"
 
           git clone \
             --depth 1 \
             --branch "${OPENWRT_TAG}" \
             "${OPENWRT_REPO}" \
-            openwrt
+            "${OPENWRT_DIR}"
 
-          cd openwrt
+          cd "${OPENWRT_DIR}"
 
           echo "============================================================"
           echo "OPENWRT VERSION"
           echo "============================================================"
 
           git describe --tags --always
-          git log -1 --oneline
+          git rev-parse HEAD
 
-          echo
-          echo "============================================================"
-          echo "TARGET CHECK"
-          echo "============================================================"
+          git describe --tags --exact-match
 
-          test -d target/linux/armsr
-          test -d target/linux/armsr/armv8
-
-          echo "armsr/armv8 target exists."
-
-      # ============================================================
-      # 4. Configure and update feeds
-      # ============================================================
-
-      - name: Configure and update feeds
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          cd openwrt
-
-          cp ../feeds.conf.default feeds.conf.default
-
-          echo "============================================================"
-          echo "FEEDS CONFIGURATION"
-          echo "============================================================"
-
-          cat feeds.conf.default
-
-          echo
-          echo "============================================================"
-          echo "UPDATE FEEDS"
-          echo "============================================================"
-
-          ./scripts/feeds update -a
-
-          echo
-          echo "============================================================"
-          echo "INSTALL FEEDS"
-          echo "============================================================"
-
-          ./scripts/feeds install -a -f
-
-      # ============================================================
-      # 5. Verify PassWall
-      # ============================================================
-
-      - name: Verify PassWall packages
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          cd openwrt
-
-          echo "============================================================"
-          echo "PASSWALL PACKAGE CHECK"
-          echo "============================================================"
-
-          find feeds/passwall_luci \
-            -maxdepth 3 \
-            -type f \
-            -name Makefile \
-            -print \
-            | head -100
-
-          echo
-          echo "============================================================"
-          echo "PASSWALL DEPENDENCY CHECK"
-          echo "============================================================"
-
-          find feeds/passwall_packages \
-            -maxdepth 2 \
-            -type d \
-            | grep -E '/(geoview|xray|sing-box)' \
-            | head -100 || true
-
-          echo
-          echo "============================================================"
-          echo "PASSWALL 2 CHECK"
-          echo "============================================================"
-
-          if [ -d feeds/passwall2 ]; then
-            echo "ERROR: PassWall 2 feed exists."
-            exit 1
-          fi
-
-          echo "PassWall 2 feed is NOT installed."
-
-      # ============================================================
-      # 6. Pin geoview to 0.2.5
-      #
-      # OpenWrt 24.10 uses Go 1.23.x.
-      #
-      # Current geoview 0.2.6 requires Go >= 1.25.
-      #
-      # Therefore use geoview 0.2.5.
-      # ============================================================
-
-      - name: Pin geoview to 0.2.5
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          cd openwrt
-
-          echo "============================================================"
-          echo "FIND GEOVIEW"
-          echo "============================================================"
-
-          find feeds package \
-            -path '*geoview*' \
-            -type f \
-            -name Makefile \
-            -print \
-            || true
-
-          echo
-
-          if [ -d "feeds/passwall_packages/geoview" ]; then
-
-            echo "Found PassWall geoview package."
-
-            sed -n '1,180p' \
-              feeds/passwall_packages/geoview/Makefile \
-              || true
-
-            cp \
-              feeds/passwall_packages/geoview/Makefile \
-              /tmp/geoview.Makefile.original
-
-            #
-            # Change package version.
-            #
-            sed -i \
-              -E 's/^PKG_VERSION:=.*/PKG_VERSION:=0.2.5/' \
-              feeds/passwall_packages/geoview/Makefile
-
-            echo
-            echo "============================================================"
-            echo "PATCHED GEOVIEW MAKEFILE"
-            echo "============================================================"
-
-            sed -n '1,180p' \
-              feeds/passwall_packages/geoview/Makefile
-
-          else
-
-            echo "ERROR: geoview package was not found."
-
-            find feeds package \
-              -type d \
-              -name geoview \
-              -print \
-              || true
-
-            exit 1
-
-          fi
-
-      # ============================================================
-      # 7. Copy .config
-      # ============================================================
-
+      # ==========================================================
+      # 5. Copy user .config
+      # ==========================================================
       - name: Install OpenWrt configuration
         shell: bash
         run: |
           set -euxo pipefail
 
-          cd openwrt
+          test -f "${GITHUB_WORKSPACE}/.config"
 
-          cp ../.config .config
+          cp \
+            "${GITHUB_WORKSPACE}/.config" \
+            "${OPENWRT_DIR}/.config"
 
           echo "============================================================"
-          echo "ORIGINAL CONFIGURATION"
+          echo "CONFIG BEFORE DEFCONFIG"
           echo "============================================================"
 
-          cat .config
+          grep -E \
+            'CONFIG_TARGET_armvirt|CONFIG_TARGET_ROOTFS|CONFIG_PACKAGE_luci-app-passwall|CONFIG_PACKAGE_xray-core|CONFIG_PACKAGE_sing-box|CONFIG_PACKAGE_wireguard|CONFIG_PACKAGE_zerotier|CONFIG_PACKAGE_docker|CONFIG_PACKAGE_dockerd|CONFIG_PACKAGE_containerd|CONFIG_PACKAGE_docker-compose|CONFIG_PACKAGE_luci-app-dockerman|CONFIG_PACKAGE_luci-app-passwall2' \
+            "${OPENWRT_DIR}/.config" \
+            | tee "${LOG_DIR}/config-before-defconfig.txt" || true
 
-      # ============================================================
-      # 8. Validate requested configuration
-      # ============================================================
-
-      - name: Validate requested configuration
+      # ==========================================================
+      # 6. Validate feeds file
+      # ==========================================================
+      - name: Install feeds.conf.default
         shell: bash
         run: |
           set -euxo pipefail
 
-          cd openwrt
+          test -f "${GITHUB_WORKSPACE}/feeds.conf.default"
+
+          cp \
+            "${GITHUB_WORKSPACE}/feeds.conf.default" \
+            "${OPENWRT_DIR}/feeds.conf.default"
 
           echo "============================================================"
-          echo "TARGET"
+          echo "FEEDS CONFIGURATION"
           echo "============================================================"
 
-          grep -E \
-            '^CONFIG_TARGET_armsr' \
-            .config \
-            || true
+          nl -ba "${OPENWRT_DIR}/feeds.conf.default" \
+            | tee "${LOG_DIR}/feeds.conf.default.txt"
 
           echo
-          echo "============================================================"
-          echo "ROOTFS"
-          echo "============================================================"
+          echo "Checking feed syntax..."
 
-          grep -E \
-            '^CONFIG_TARGET_ROOTFS' \
-            .config \
-            || true
+          while IFS= read -r line; do
+            case "${line}" in
+              ""|\#*)
+                continue
+                ;;
+              src-git\ *)
+                ;;
+              *)
+                echo "ERROR: Invalid feeds.conf.default line:"
+                echo "${line}"
+                exit 1
+                ;;
+            esac
+          done < "${OPENWRT_DIR}/feeds.conf.default"
 
-          echo
-          echo "============================================================"
-          echo "PASSWALL"
-          echo "============================================================"
-
-          grep -E \
-            '^CONFIG_PACKAGE_(luci-app-passwall|xray-core|sing-box)=' \
-            .config \
-            || true
-
-          echo
-          echo "============================================================"
-          echo "PASSWALL 2"
-          echo "============================================================"
-
-          if grep -E \
-            '^[[:space:]]*CONFIG_PACKAGE_luci-app-passwall2=' \
-            .config
-          then
-            echo "ERROR: PassWall 2 is enabled."
-            exit 1
-          fi
-
-          echo "PassWall 2 disabled."
-
-          echo
-          echo "============================================================"
-          echo "DOCKER"
-          echo "============================================================"
-
-          if grep -E \
-            '^[[:space:]]*CONFIG_PACKAGE_(docker|dockerd|dockerman|luci-app-dockerman|containerd|docker-compose|docker-compose-v2)=' \
-            .config
-          then
-            echo "ERROR: Docker package unexpectedly enabled."
-            exit 1
-          fi
-
-          echo "Docker packages are not enabled."
-
-      # ============================================================
-      # 9. Generate final configuration
-      # ============================================================
-
-      - name: Run make defconfig
+      # ==========================================================
+      # 7. Update feeds
+      # ==========================================================
+      - name: Update OpenWrt feeds
+        working-directory: ${{ env.OPENWRT_DIR }}
         shell: bash
         run: |
           set -euxo pipefail
 
-          cd openwrt
+          ./scripts/feeds update -a 2>&1 \
+            | tee "${LOG_DIR}/feeds-update.log"
 
-          make defconfig
-
-          echo "============================================================"
-          echo "FINAL CONFIGURATION"
-          echo "============================================================"
-
-          grep -E \
-            '^CONFIG_TARGET_armsr' \
-            .config \
-            || true
-
-          echo
-          echo "===== PASSWALL ====="
-
-          grep -E \
-            '^CONFIG_PACKAGE_(luci-app-passwall|xray-core|sing-box)' \
-            .config \
-            || true
-
-          echo
-          echo "===== PASSWALL 2 ====="
-
-          grep -E \
-            '^CONFIG_PACKAGE_luci-app-passwall2=' \
-            .config \
-            || echo "PassWall 2 not enabled."
-
-          echo
-          echo "===== GEOVIEW ====="
-
-          grep '^PKG_VERSION:=' \
-            feeds/passwall_packages/geoview/Makefile \
-            || true
-
-      # ============================================================
-      # 10. Final configuration validation
-      # ============================================================
-
-      - name: Final configuration validation
+      # ==========================================================
+      # 8. Install feeds
+      # ==========================================================
+      - name: Install OpenWrt feeds
+        working-directory: ${{ env.OPENWRT_DIR }}
         shell: bash
         run: |
           set -euxo pipefail
 
-          cd openwrt
+          ./scripts/feeds install -a 2>&1 \
+            | tee "${LOG_DIR}/feeds-install.log"
 
-          echo "============================================================"
-          echo "TARGET VALIDATION"
-          echo "============================================================"
-
-          grep -q \
-            '^CONFIG_TARGET_armsr=y' \
-            .config
-
-          grep -q \
-            '^CONFIG_TARGET_armsr_armv8=y' \
-            .config
-
-          grep -q \
-            '^CONFIG_TARGET_armsr_armv8_DEVICE_generic=y' \
-            .config
-
-          echo "Target OK."
-
-          echo
-          echo "============================================================"
-          echo "PASSWALL VALIDATION"
-          echo "============================================================"
-
-          grep -q \
-            '^CONFIG_PACKAGE_luci-app-passwall=y' \
-            .config
-
-          echo "PassWall OK."
-
-          echo
-          echo "============================================================"
-          echo "PASSWALL 2 VALIDATION"
-          echo "============================================================"
-
-          if grep -E \
-            '^CONFIG_PACKAGE_luci-app-passwall2=' \
-            .config
-          then
-            echo "ERROR: PassWall 2 is enabled."
-            exit 1
-          fi
-
-          echo "PassWall 2 disabled."
-
-          echo
-          echo "============================================================"
-          echo "XRAY / SING-BOX VALIDATION"
-          echo "============================================================"
-
-          grep -q \
-            '^CONFIG_PACKAGE_xray-core=y' \
-            .config
-
-          grep -q \
-            '^CONFIG_PACKAGE_sing-box=y' \
-            .config
-
-          echo "Xray/Sing-box OK."
-
-          echo
-          echo "============================================================"
-          echo "PPPOE VALIDATION"
-          echo "============================================================"
-
-          grep -q \
-            '^CONFIG_PACKAGE_ppp-mod-pppoe=y' \
-            .config
-
-          echo "PPPoE OK."
-
-          echo
-          echo "============================================================"
-          echo "IPV6 VALIDATION"
-          echo "============================================================"
-
-          grep -q \
-            '^CONFIG_PACKAGE_ipv6helper=y' \
-            .config
-
-          echo "IPv6 OK."
-
-          echo
-          echo "============================================================"
-          echo "WIREGUARD VALIDATION"
-          echo "============================================================"
-
-          grep -q \
-            '^CONFIG_PACKAGE_kmod-wireguard=y' \
-            .config
-
-          echo "WireGuard OK."
-
-          echo
-          echo "============================================================"
-          echo "ZEROTIER VALIDATION"
-          echo "============================================================"
-
-          grep -q \
-            '^CONFIG_PACKAGE_zerotier=y' \
-            .config
-
-          echo "ZeroTier OK."
-
-          echo
-          echo "============================================================"
-          echo "DOCKER VALIDATION"
-          echo "============================================================"
-
-          if grep -E \
-            '^[[:space:]]*CONFIG_PACKAGE_(docker|dockerd|dockerman|luci-app-dockerman|containerd|docker-compose|docker-compose-v2)=' \
-            .config
-          then
-            echo "ERROR: Docker package enabled."
-            exit 1
-          fi
-
-          echo "Docker disabled."
-
-          echo
-          echo "============================================================"
-          echo "GEOVIEW VALIDATION"
-          echo "============================================================"
-
-          GEOVIEW_VERSION="$(
-            grep '^PKG_VERSION:=' \
-              feeds/passwall_packages/geoview/Makefile \
-              | head -1 \
-              | cut -d= -f2
-          )"
-
-          echo "geoview version: ${GEOVIEW_VERSION}"
-
-          if [ "${GEOVIEW_VERSION}" != "0.2.5" ]; then
-            echo "ERROR: geoview is not pinned to 0.2.5."
-            exit 1
-          fi
-
-          echo "geoview 0.2.5 confirmed."
-
-      # ============================================================
-      # 11. Download sources
-      # ============================================================
-
-      - name: Download sources
+      # ==========================================================
+      # 9. Verify PassWall source tree
+      # ==========================================================
+      - name: Verify PassWall feeds
+        working-directory: ${{ env.OPENWRT_DIR }}
         shell: bash
         run: |
           set -euxo pipefail
 
-          cd openwrt
-
-          mkdir -p /tmp/openwrt-logs
-
           echo "============================================================"
-          echo "DOWNLOAD SOURCES"
+          echo "PASSWALL FEED"
           echo "============================================================"
 
-          make download -j2 V=s \
-            2>&1 | tee /tmp/openwrt-logs/download.log
+          test -d "feeds/passwall_luci"
+          test -d "feeds/passwall_packages"
 
-      # ============================================================
-      # 12. Build OpenWrt
-      #
-      # -j1 is intentional.
-      #
-      # It exposes the FIRST actual compilation error.
-      # ============================================================
+          test -d "feeds/passwall_luci/luci-app-passwall"
+          test -f "feeds/passwall_luci/luci-app-passwall/Makefile"
 
+          test -d "feeds/passwall_packages/geoview"
+          test -f "feeds/passwall_packages/geoview/Makefile"
+
+          test -d "feeds/passwall_packages/xray-core"
+          test -d "feeds/passwall_packages/sing-box"
+
+          echo
+          echo "PassWall source tree verified."
+
+          echo
+          echo "============================================================"
+          echo "PASSWALL FILES"
+          echo "============================================================"
+
+          find feeds/passwall_luci \
+            -maxdepth 3 \
+            -type f \
+            | sort \
+            | head -100 \
+            | tee "${LOG_DIR}/passwall-luci-files.txt"
+
+          find feeds/passwall_packages \
+            -maxdepth 2 \
+            -type f \
+            | sort \
+            | head -200 \
+            | tee "${LOG_DIR}/passwall-packages-files.txt"
+
+      # ==========================================================
+      # 10. Defconfig
+      # ==========================================================
+      - name: Run OpenWrt defconfig
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          make defconfig 2>&1 \
+            | tee "${LOG_DIR}/defconfig.log"
+
+      # ==========================================================
+      # 11. Verify final configuration
+      # ==========================================================
+      - name: Verify final OpenWrt configuration
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cp .config "${LOG_DIR}/final.config"
+
+          echo "============================================================"
+          echo "FINAL TARGET"
+          echo "============================================================"
+
+          grep -E \
+            '^CONFIG_TARGET_|^CONFIG_ARCH|^CONFIG_CPU_TYPE' \
+            .config \
+            | tee "${LOG_DIR}/final-target-config.txt"
+
+          echo
+          echo "============================================================"
+          echo "FINAL PASSWALL CONFIG"
+          echo "============================================================"
+
+          grep -E \
+            '^CONFIG_PACKAGE_(luci-app-passwall|xray-core|sing-box|geoview|tcping|chinadns-ng|dns2socks|ipt2socks|hysteria)' \
+            .config \
+            | tee "${LOG_DIR}/final-passwall-config.txt" \
+            || true
+
+          echo
+          echo "============================================================"
+          echo "FINAL NETWORK CONFIG"
+          echo "============================================================"
+
+          grep -E \
+            '^CONFIG_PACKAGE_(ppp|ppp-mod-pppoe|ipv6helper|wireguard-tools|kmod-wireguard|zerotier|luci-app-zerotier)' \
+            .config \
+            | tee "${LOG_DIR}/final-network-config.txt" \
+            || true
+
+          echo
+          echo "============================================================"
+          echo "DOCKER CHECK"
+          echo "============================================================"
+
+          if grep -E \
+            '^CONFIG_PACKAGE_(docker|dockerd|containerd|docker-compose)|^CONFIG_PACKAGE_luci-app-dockerman' \
+            .config; then
+
+            echo "ERROR: Docker-related package is enabled."
+            exit 1
+          fi
+
+          echo "Docker ecosystem is disabled."
+
+          echo
+          echo "============================================================"
+          echo "PASSWALL2 CHECK"
+          echo "============================================================"
+
+          if grep -E '^CONFIG_PACKAGE_luci-app-passwall2=y' .config; then
+            echo "ERROR: PassWall2 must not be included."
+            exit 1
+          fi
+
+          echo "PassWall2 is disabled."
+
+      # ==========================================================
+      # 12. Download sources
+      # ==========================================================
+      - name: Download OpenWrt sources
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          make download -j2 V=s 2>&1 \
+            | tee "${LOG_DIR}/download.log"
+
+      # ==========================================================
+      # 13. Compile
+      # ==========================================================
       - name: Build OpenWrt
-        shell: bash
-        run: |
-          set -o pipefail
-
-          cd openwrt
-
-          mkdir -p /tmp/openwrt-logs
-
-          echo "============================================================"
-          echo "START OPENWRT BUILD"
-          echo "============================================================"
-
-          echo "Build time:"
-          date
-
-          echo
-          echo "CPU:"
-          nproc
-
-          echo
-          echo "OpenWrt:"
-          git describe --tags --always
-
-          echo
-          echo "PassWall:"
-          grep -E \
-            '^CONFIG_PACKAGE_(luci-app-passwall|xray-core|sing-box)=' \
-            .config \
-            || true
-
-          echo
-          echo "PassWall 2:"
-          grep -E \
-            '^CONFIG_PACKAGE_luci-app-passwall2=' \
-            .config \
-            || echo "disabled"
-
-          echo
-          echo "geoview:"
-          grep '^PKG_VERSION:=' \
-            feeds/passwall_packages/geoview/Makefile \
-            || true
-
-          echo
-          echo "============================================================"
-          echo "RUN: make -j1 world V=s"
-          echo "============================================================"
-
-          make -j1 world V=s \
-            2>&1 | tee /tmp/openwrt-logs/build.log
-
-      # ============================================================
-      # 13. Diagnose build failure
-      # ============================================================
-
-      - name: Diagnose build failure
-        if: failure()
+        working-directory: ${{ env.OPENWRT_DIR }}
         shell: bash
         run: |
           set +e
 
-          echo
           echo "============================================================"
-          echo "OPENWRT BUILD FAILED"
+          echo "OPENWRT BUILD START"
           echo "============================================================"
 
-          if [ -f /tmp/openwrt-logs/build.log ]; then
+          date -u
 
-            echo
-            echo "============================================================"
-            echo "LAST 300 LINES"
-            echo "============================================================"
+          make -j"$(nproc)" V=s 2>&1 \
+            | tee "${LOG_DIR}/build.log"
 
-            tail -n 300 \
-              /tmp/openwrt-logs/build.log
+          BUILD_STATUS=${PIPESTATUS[0]}
 
-            echo
-            echo "============================================================"
-            echo "ERROR / FAILED / FATAL"
-            echo "============================================================"
-
-            grep -nEi \
-              'error:|error |failed|fatal|No rule to make|cannot find|not found|requires go|GOTOOLCHAIN' \
-              /tmp/openwrt-logs/build.log \
-              | tail -n 200 \
-              || true
-
-            echo
-            echo "============================================================"
-            echo "MAKE ERROR SUMMARY"
-            echo "============================================================"
-
-            grep -nEi \
-              'make\[[0-9]+\].*(Error|error)|world.*Error|package/feeds/.*/compile' \
-              /tmp/openwrt-logs/build.log \
-              | tail -n 100 \
-              || true
-
-          fi
+          echo "${BUILD_STATUS}" \
+            > "${LOG_DIR}/build-exit-code.txt"
 
           echo
           echo "============================================================"
-          echo "GEOVIEW MAKEFILE"
+          echo "OPENWRT BUILD EXIT CODE: ${BUILD_STATUS}"
           echo "============================================================"
 
-          if [ -f openwrt/feeds/passwall_packages/geoview/Makefile ]; then
-            cat openwrt/feeds/passwall_packages/geoview/Makefile
+          if [ "${BUILD_STATUS}" -ne 0 ]; then
+            echo
+            echo "============================================================"
+            echo "LAST 300 LINES OF BUILD LOG"
+            echo "============================================================"
+
+            tail -n 300 "${LOG_DIR}/build.log" \
+              | tee "${LOG_DIR}/build-last-300-lines.txt"
+
+            echo
+            echo "============================================================"
+            echo "FAILED BUILD DIRECTORY"
+            echo "============================================================"
+
+            find "${OPENWRT_DIR}/build_dir" \
+              -maxdepth 3 \
+              -type f \
+              -name '*.log' \
+              -print \
+              2>/dev/null \
+              | head -100 \
+              | tee "${LOG_DIR}/build-dir-logs.txt"
+
+            exit "${BUILD_STATUS}"
           fi
 
           echo
-          echo "============================================================"
-          echo "OPENWRT CONFIG"
-          echo "============================================================"
+          echo "OpenWrt build completed successfully."
 
-          if [ -f openwrt/.config ]; then
-
-            grep -E \
-              '^CONFIG_TARGET_|^CONFIG_PACKAGE_(luci-app-passwall|luci-app-passwall2|xray-core|sing-box|zerotier|kmod-wireguard)' \
-              openwrt/.config \
-              | head -n 200
-
-          fi
-
-          exit 1
-
-      # ============================================================
-      # 14. Verify OpenWrt output
-      # ============================================================
-
-      - name: Verify OpenWrt output
+      # ==========================================================
+      # 14. Validate OpenWrt output
+      # ==========================================================
+      - name: Validate OpenWrt rootfs output
+        if: success()
+        working-directory: ${{ env.OPENWRT_DIR }}
         shell: bash
         run: |
           set -euxo pipefail
 
-          cd openwrt
-
           echo "============================================================"
-          echo "BUILD OUTPUT"
+          echo "OPENWRT OUTPUT"
           echo "============================================================"
 
-          find bin/targets/armsr/armv8 \
-            -maxdepth 1 \
+          find bin/targets \
             -type f \
-            -printf '%f\n' \
-            | sort
+            -printf '%p %s bytes\n' \
+            | tee "${LOG_DIR}/openwrt-output.txt"
 
-          echo
-          echo "============================================================"
-          echo "ROOTFS TAR"
-          echo "============================================================"
+          ROOTFS_FILES=$(find bin/targets \
+            -type f \
+            -name '*rootfs.tar.gz' \
+            | wc -l)
 
-          ROOTFS="$(
-            find \
-              bin/targets/armsr/armv8 \
-              -maxdepth 1 \
-              -type f \
-              -name '*rootfs.tar.gz' \
-              | head -1
-          )"
-
-          if [ -z "${ROOTFS}" ]; then
-            echo "ERROR: OpenWrt rootfs.tar.gz was not generated."
+          if [ "${ROOTFS_FILES}" -eq 0 ]; then
+            echo "ERROR: No rootfs.tar.gz was generated."
             exit 1
           fi
 
+          ROOTFS=$(find bin/targets \
+            -type f \
+            -name '*rootfs.tar.gz' \
+            | head -n 1)
+
+          echo
           echo "ROOTFS:"
           echo "${ROOTFS}"
 
-          ls -lh "${ROOTFS}"
+          SIZE=$(stat -c '%s' "${ROOTFS}")
 
-      # ============================================================
-      # 15. Package for Phicomm N1 / S905D
-      # ============================================================
+          echo
+          echo "ROOTFS SIZE: ${SIZE} bytes"
 
-      - name: Prepare N1 packaging
+          if [ "${SIZE}" -lt 1000000 ]; then
+            echo "ERROR: rootfs.tar.gz is suspiciously small."
+            exit 1
+          fi
+
+          echo
+          echo "Testing tar archive..."
+
+          tar -tzf "${ROOTFS}" \
+            > "${LOG_DIR}/rootfs-file-list.txt"
+
+          test -s "${LOG_DIR}/rootfs-file-list.txt"
+
+          sha256sum "${ROOTFS}" \
+            | tee "${LOG_DIR}/rootfs.sha256"
+
+          echo
+          echo "Rootfs archive verified successfully."
+
+      # ==========================================================
+      # 15. Upload raw OpenWrt build
+      # ==========================================================
+      - name: Upload OpenWrt build
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: n1-openwrt-24.10.8-openwrt-rootfs
+          path: |
+            ${{ env.OPENWRT_DIR }}/bin/targets/armvirt/64/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: true
+
+      # ==========================================================
+      # 16. Package with Flippy for Phicomm N1 / S905D
+      # ==========================================================
+      - name: Package Phicomm N1 S905D firmware
+        if: success()
+        uses: ophub/flippy-openwrt-actions@main
+        env:
+          OPENWRT_ARMSR: ${{ env.OPENWRT_DIR }}/bin/targets/armvirt/64/*rootfs.tar.gz
+
+          PACKAGE_SOC: s905d
+
+          KERNEL_REPO_URL: breakingbadboy/OpenWrt
+          KERNEL_VERSION_NAME: 6.12.y
+          KERNEL_AUTO_LATEST: true
+
+          OPENWRT_IP: 192.168.1.1
+
+          WHOAMI: N1-OpenWrt
+
+          SW_FLOWOFFLOAD: 1
+          HW_FLOWOFFLOAD: 0
+          SFE_FLOW: 1
+
+          SAVE_OPENWRT_ROOTFS: true
+
+      # ==========================================================
+      # 17. Validate Flippy result
+      # ==========================================================
+      - name: Validate N1 firmware
+        if: always()
         shell: bash
         run: |
-          set -euxo pipefail
+          set +e
+
+          mkdir -p "${LOG_DIR}/n1-output"
 
           echo "============================================================"
-          echo "PREPARE PHICOMM N1 PACKAGING"
+          echo "SEARCHING FOR FLIPPY OUTPUT"
           echo "============================================================"
 
-          ls -lh \
-            openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz
+          find /opt \
+            -maxdepth 5 \
+            -type f \
+            \( -name '*.img' -o -name '*.img.gz' -o -name '*.img.xz' -o -name '*.img.zst' \) \
+            -printf '%p %s bytes\n' \
+            2>/dev/null \
+            | tee "${LOG_DIR}/flippy-output.txt"
 
-      # ============================================================
-      # 16. OHub / Amlogic S9xxx packaging
-      # ============================================================
+          echo
+          echo "============================================================"
+          echo "COPYING N1 IMAGES"
+          echo "============================================================"
 
-      - name: Package N1 firmware
-        uses: ophub/amlogic-s9xxx-openwrt@main
-        with:
-          openwrt_path: openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz
-          openwrt_board: s905d
-          openwrt_kernel: 6.12.y_6.18.y
-          auto_kernel: true
-          openwrt_ip: 192.168.1.1
+          find /opt \
+            -maxdepth 5 \
+            -type f \
+            \( -name '*s905d*' -o -name '*n1*' \) \
+            \( -name '*.img' -o -name '*.img.gz' -o -name '*.img.xz' -o -name '*.img.zst' \) \
+            -exec cp -v {} "${LOG_DIR}/n1-output/" \; \
+            2>/dev/null || true
 
-      # ============================================================
-      # 17. Show final N1 firmware
-      # ============================================================
+          find "${LOG_DIR}/n1-output" \
+            -type f \
+            -printf '%f %s bytes\n' \
+            | tee "${LOG_DIR}/n1-output-list.txt"
 
-      - name: Show N1 firmware
+      # ==========================================================
+      # 18. Collect ALL diagnostics
+      # ==========================================================
+      - name: Collect final diagnostics
         if: always()
         shell: bash
         run: |
           set +e
 
           echo "============================================================"
-          echo "N1 OUTPUT"
+          echo "FINAL DIAGNOSTICS"
           echo "============================================================"
 
-          if [ -d openwrt/out ]; then
-
-            find openwrt/out \
-              -maxdepth 2 \
-              -type f \
-              -printf '%p\n' \
-              | sort
-
+          {
+            echo "Date:"
+            date -u
             echo
-            echo "============================================================"
-            echo "FILE SIZES"
-            echo "============================================================"
 
-            find openwrt/out \
-              -maxdepth 2 \
+            echo "Workspace:"
+            pwd
+            echo
+
+            echo "Disk:"
+            df -h
+            echo
+
+            echo "OpenWrt directory:"
+            ls -lah "${OPENWRT_DIR}" 2>/dev/null || true
+            echo
+
+            echo "Build logs:"
+            find "${LOG_DIR}" \
+              -maxdepth 3 \
               -type f \
-              -exec ls -lh {} \;
+              -printf '%p %s bytes\n' \
+              2>/dev/null \
+              | sort
+          } | tee "${LOG_DIR}/final-diagnostics.txt"
 
-          else
-
-            echo "openwrt/out does not exist."
-
+          if [ -f "${LOG_DIR}/build.log" ]; then
+            tail -n 300 "${LOG_DIR}/build.log" \
+              > "${LOG_DIR}/build-last-300-lines.txt"
           fi
 
-      # ============================================================
-      # 18. Upload diagnostic logs
-      # ============================================================
-
+      # ==========================================================
+      # 19. ALWAYS upload logs
+      # ==========================================================
       - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: n1-openwrt-24.10.8-build-logs
           path: |
-            /tmp/openwrt-logs/
-            /tmp/geoview.Makefile.original
-            openwrt/.config
-            openwrt/feeds/passwall_packages/geoview/Makefile
-          if-no-files-found: warn
-          retention-days: 14
-
-      # ============================================================
-      # 19. Upload OpenWrt rootfs
-      # ============================================================
-
-      - name: Upload OpenWrt rootfs
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: n1-openwrt-24.10.8-rootfs
-          path: |
-            openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz
-            openwrt/bin/targets/armsr/armv8/sha256sums
+            ${{ env.LOG_DIR }}/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
+          compression-level: 6
+          overwrite: true
+          include-hidden-files: true
 
-      # ============================================================
-      # 20. Upload final N1 firmware
-      # ============================================================
-
+      # ==========================================================
+      # 20. Upload N1 firmware
+      # ==========================================================
       - name: Upload N1 firmware
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: n1-openwrt-24.10.8-firmware
           path: |
-            openwrt/out/**
+            ${{ env.LOG_DIR }}/n1-output/
           if-no-files-found: error
           retention-days: 30
+          compression-level: 0
+          overwrite: true
