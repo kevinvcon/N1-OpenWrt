@@ -1,549 +1,523 @@
 name: Build N1 OpenWrt 24.10.8
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 permissions:
-contents: read
+  contents: read
 
 env:
-OPENWRT_REPO: https://github.com/openwrt/openwrt.git
-OPENWRT_TAG: v24.10.8
-OPENWRT_DIR: ${{ github.workspace }}/openwrt
-LOG_DIR: ${{ github.workspace }}/build-logs
+  OPENWRT_REPO: https://github.com/openwrt/openwrt.git
+  OPENWRT_TAG: v24.10.8
+  OPENWRT_DIR: ${{ github.workspace }}/openwrt
+  LOG_DIR: ${{ github.workspace }}/build-logs
 
 jobs:
-build:
-name: OpenWrt 24.10.8 armvirt64 N1
-runs-on: ubuntu-24.04
+  build:
+    name: Build OpenWrt 24.10.8 for N1
+    runs-on: ubuntu-24.04
 
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-steps:
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
 
-  - name: Checkout configuration
-    uses: actions/checkout@v4
+          sudo apt-get update
 
-  - name: Install build dependencies
-    shell: bash
-    run: |
-      set -euxo pipefail
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            flex \
+            bison \
+            gawk \
+            gettext \
+            git \
+            libncurses-dev \
+            libssl-dev \
+            python3 \
+            python3-pip \
+            python3-setuptools \
+            python3-wheel \
+            rsync \
+            unzip \
+            wget \
+            curl \
+            file \
+            zstd \
+            xz-utils \
+            gzip \
+            bzip2 \
+            tar \
+            ccache \
+            swig \
+            time \
+            help2man \
+            libelf-dev \
+            libdw-dev \
+            elfutils \
+            pkg-config \
+            autoconf \
+            automake \
+            libtool \
+            device-tree-compiler \
+            qemu-utils
 
-      sudo apt-get update
+      - name: Initialize build logs
+        shell: bash
+        run: |
+          set -eux
 
-      sudo apt-get install -y \
-        build-essential \
-        clang \
-        flex \
-        bison \
-        gawk \
-        gettext \
-        git \
-        libncurses-dev \
-        libssl-dev \
-        python3 \
-        python3-pip \
-        python3-setuptools \
-        python3-wheel \
-        rsync \
-        unzip \
-        wget \
-        curl \
-        file \
-        zstd \
-        xz-utils \
-        gzip \
-        bzip2 \
-        tar \
-        ccache \
-        swig \
-        time \
-        help2man \
-        libelf-dev \
-        libdw-dev \
-        elfutils \
-        pkg-config \
-        autoconf \
-        automake \
-        libtool \
-        device-tree-compiler \
-        qemu-utils
+          mkdir -p "${LOG_DIR}"
 
-  - name: Initialize logs
-    shell: bash
-    run: |
-      set -eux
-
-      mkdir -p "${LOG_DIR}"
-
-      {
-        echo "Build start:"
-        date -u
-        echo
-        echo "Kernel:"
-        uname -a
-        echo
-        echo "CPU:"
-        nproc
-        echo
-        echo "Memory:"
-        free -h
-        echo
-        echo "Disk:"
-        df -h
-      } | tee "${LOG_DIR}/environment.txt"
-
-  - name: Validate repository files
-    shell: bash
-    run: |
-      set -euxo pipefail
-
-      test -f .config
-      test -f feeds.conf.default
-      test -f .github/workflows/build-n1.yml
-
-      echo "Repository files:"
-      ls -lah
-
-      echo
-      echo "First 10 lines of .config:"
-      sed -n '1,10p' .config
-
-      echo
-      echo "First 20 lines of feeds.conf.default:"
-      sed -n '1,20p' feeds.conf.default
-
-      cp .config "${LOG_DIR}/user-config.txt"
-      cp feeds.conf.default "${LOG_DIR}/user-feeds.conf.default"
-
-  - name: Validate .config format
-    shell: bash
-    run: |
-      set -euxo pipefail
-
-      FIRST_LINE="$(head -n 1 .config)"
-
-      echo "First .config line:"
-      printf '%s\n' "${FIRST_LINE}"
-
-      case "${FIRST_LINE}" in
-        CONFIG_*|\#*)
-          ;;
-        *)
-          echo
-          echo "ERROR: .config is not a valid OpenWrt configuration."
-          echo
-          echo "The first line must look like:"
-          echo "CONFIG_TARGET_armvirt=y"
-          echo
-          echo "Possible Markdown/code-fence contamination detected."
-          exit 1
-          ;;
-      esac
-
-      if grep -nE '^```|^\[https?://|^\s*\[.*\]\(https?://' .config; then
-        echo
-        echo "ERROR: Markdown content detected inside .config."
-        exit 1
-      fi
-
-  - name: Validate feeds.conf.default format
-    shell: bash
-    run: |
-      set -euxo pipefail
-
-      while IFS= read -r line || [ -n "$line" ]; do
-        case "${line}" in
-          "")
-            continue
-            ;;
-          \#*)
-            continue
-            ;;
-          src-git\ *)
-            ;;
-          *)
+          {
+            echo "Build start:"
+            date -u
             echo
-            echo "ERROR: Invalid feeds.conf.default line:"
-            printf '%s\n' "${line}"
+            echo "Kernel:"
+            uname -a
+            echo
+            echo "CPU:"
+            nproc
+            echo
+            echo "Memory:"
+            free -h
+            echo
+            echo "Disk:"
+            df -h
+          } | tee "${LOG_DIR}/environment.txt"
+
+      - name: Validate repository files
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          test -f .config
+          test -f feeds.conf.default
+
+          echo "Repository files:"
+          ls -lah
+
+          echo
+          echo "First 10 lines of .config:"
+          sed -n '1,10p' .config
+
+          echo
+          echo "feeds.conf.default:"
+          sed -n '1,30p' feeds.conf.default
+
+          cp .config "${LOG_DIR}/user-config.txt"
+          cp feeds.conf.default "${LOG_DIR}/user-feeds.conf.default"
+
+      - name: Validate .config
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          FIRST_LINE="$(head -n 1 .config)"
+
+          echo "First line:"
+          printf '%s\n' "${FIRST_LINE}"
+
+          case "${FIRST_LINE}" in
+            CONFIG_*|\#*)
+              ;;
+            *)
+              echo
+              echo "ERROR: .config is invalid."
+              echo "The first line must be an OpenWrt CONFIG line."
+              exit 1
+              ;;
+          esac
+
+          if grep -nE '^```|^\[https?://|^\[.*\]\(https?://' .config; then
+            echo
+            echo "ERROR: Markdown content detected in .config."
             exit 1
-            ;;
-        esac
-      done < feeds.conf.default
-
-      if grep -nE '\[[^]]+\]\(https?://' feeds.conf.default; then
-        echo
-        echo "ERROR: Markdown links detected in feeds.conf.default."
-        exit 1
-      fi
-
-  - name: Clone OpenWrt 24.10.8
-    shell: bash
-    run: |
-      set -euxo pipefail
-
-      rm -rf "${OPENWRT_DIR}"
-
-      git clone \
-        --depth 1 \
-        --branch "${OPENWRT_TAG}" \
-        "${OPENWRT_REPO}" \
-        "${OPENWRT_DIR}"
-
-      cd "${OPENWRT_DIR}"
-
-      echo "OpenWrt tag:"
-      git describe --tags --always
-
-      echo "OpenWrt commit:"
-      git rev-parse HEAD
-
-  - name: Install OpenWrt configuration
-    shell: bash
-    run: |
-      set -euxo pipefail
-
-      cp \
-        "${GITHUB_WORKSPACE}/.config" \
-        "${OPENWRT_DIR}/.config"
-
-      cp \
-        "${GITHUB_WORKSPACE}/feeds.conf.default" \
-        "${OPENWRT_DIR}/feeds.conf.default"
-
-  - name: Validate copied OpenWrt files
-    working-directory: ${{ env.OPENWRT_DIR }}
-    shell: bash
-    run: |
-      set -euxo pipefail
-
-      echo "============================================================"
-      echo "OPENWRT .config"
-      echo "============================================================"
-
-      sed -n '1,20p' .config
-
-      echo
-      echo "============================================================"
-      echo "OPENWRT FEEDS"
-      echo "============================================================"
-
-      nl -ba feeds.conf.default
-
-      FIRST_LINE="$(head -n 1 .config)"
-
-      case "${FIRST_LINE}" in
-        CONFIG_*|\#*)
-          ;;
-        *)
-          echo "ERROR: copied .config is invalid."
-          exit 1
-          ;;
-      esac
-
-  - name: Update OpenWrt feeds
-    working-directory: ${{ env.OPENWRT_DIR }}
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      echo "============================================================"
-      echo "UPDATING FEEDS"
-      echo "============================================================"
-
-      ./scripts/feeds update -a 2>&1 \
-        | tee "${LOG_DIR}/feeds-update.log"
-
-  - name: Verify feed update result
-    working-directory: ${{ env.OPENWRT_DIR }}
-    shell: bash
-    run: |
-      set -euxo pipefail
-
-      for feed in \
-        packages \
-        luci \
-        routing \
-        telephony \
-        passwall_packages \
-        passwall_luci
-      do
-        echo "Checking feed: ${feed}"
-
-        test -d "feeds/${feed}"
-
-        echo "OK: feeds/${feed}"
-      done
-
-  - name: Install OpenWrt feeds
-    working-directory: ${{ env.OPENWRT_DIR }}
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      ./scripts/feeds install -a 2>&1 \
-        | tee "${LOG_DIR}/feeds-install.log"
-
-  - name: Verify PassWall
-    working-directory: ${{ env.OPENWRT_DIR }}
-    shell: bash
-    run: |
-      set -euxo pipefail
-
-      test -f \
-        feeds/passwall_luci/luci-app-passwall/Makefile
-
-      test -f \
-        feeds/passwall_packages/geoview/Makefile
-
-      test -d \
-        feeds/passwall_packages/xray-core
-
-      test -d \
-        feeds/passwall_packages/sing-box
-
-      echo "PassWall feed verified."
-
-      {
-        echo "PassWall LuCI:"
-        find feeds/passwall_luci/luci-app-passwall \
-          -maxdepth 2 -type f | sort
-
-        echo
-        echo "PassWall packages:"
-        find feeds/passwall_packages \
-          -maxdepth 2 -type f \
-          | sort \
-          | head -200
-      } > "${LOG_DIR}/passwall-files.txt"
-
-  - name: Run defconfig
-    working-directory: ${{ env.OPENWRT_DIR }}
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      make defconfig 2>&1 \
-        | tee "${LOG_DIR}/defconfig.log"
-
-  - name: Verify final configuration
-    working-directory: ${{ env.OPENWRT_DIR }}
-    shell: bash
-    run: |
-      set -euxo pipefail
+          fi
+
+      - name: Validate feeds.conf.default
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          while IFS= read -r line || [ -n "$line" ]; do
+            case "${line}" in
+              "")
+                continue
+                ;;
+              \#*)
+                continue
+                ;;
+              src-git\ *)
+                ;;
+              *)
+                echo
+                echo "ERROR: Invalid feeds.conf.default line:"
+                printf '%s\n' "${line}"
+                exit 1
+                ;;
+            esac
+          done < feeds.conf.default
+
+          if grep -nE '\[[^]]+\]\(https?://' feeds.conf.default; then
+            echo
+            echo "ERROR: Markdown links detected in feeds.conf.default."
+            exit 1
+          fi
+
+      - name: Clone OpenWrt 24.10.8
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf "${OPENWRT_DIR}"
+
+          git clone \
+            --depth 1 \
+            --branch "${OPENWRT_TAG}" \
+            "${OPENWRT_REPO}" \
+            "${OPENWRT_DIR}"
+
+          cd "${OPENWRT_DIR}"
+
+          echo "OpenWrt version:"
+          git describe --tags --always
+
+          echo "OpenWrt commit:"
+          git rev-parse HEAD
+
+      - name: Install OpenWrt configuration
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cp \
+            "${GITHUB_WORKSPACE}/.config" \
+            "${OPENWRT_DIR}/.config"
+
+          cp \
+            "${GITHUB_WORKSPACE}/feeds.conf.default" \
+            "${OPENWRT_DIR}/feeds.conf.default"
+
+      - name: Validate copied files
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "============================================================"
+          echo "OPENWRT CONFIG"
+          echo "============================================================"
+
+          sed -n '1,20p' .config
+
+          echo
+          echo "============================================================"
+          echo "OPENWRT FEEDS"
+          echo "============================================================"
+
+          nl -ba feeds.conf.default
+
+          FIRST_LINE="$(head -n 1 .config)"
+
+          case "${FIRST_LINE}" in
+            CONFIG_*|\#*)
+              ;;
+            *)
+              echo "ERROR: copied .config is invalid."
+              exit 1
+              ;;
+          esac
+
+      - name: Update OpenWrt feeds
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "============================================================"
+          echo "UPDATING FEEDS"
+          echo "============================================================"
+
+          ./scripts/feeds update -a 2>&1 \
+            | tee "${LOG_DIR}/feeds-update.log"
+
+      - name: Verify feeds
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          for feed in \
+            packages \
+            luci \
+            routing \
+            telephony \
+            passwall_packages \
+            passwall_luci
+          do
+            echo "Checking feeds/${feed}"
+
+            test -d "feeds/${feed}"
+
+            echo "OK"
+          done
+
+      - name: Install OpenWrt feeds
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./scripts/feeds install -a 2>&1 \
+            | tee "${LOG_DIR}/feeds-install.log"
+
+      - name: Verify PassWall
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          test -f \
+            feeds/passwall_luci/luci-app-passwall/Makefile
+
+          test -f \
+            feeds/passwall_packages/geoview/Makefile
+
+          test -d \
+            feeds/passwall_packages/xray-core
+
+          test -d \
+            feeds/passwall_packages/sing-box
+
+          echo "PassWall feed verified."
+
+      - name: Run defconfig
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          make defconfig 2>&1 \
+            | tee "${LOG_DIR}/defconfig.log"
+
+      - name: Verify final configuration
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cp .config "${LOG_DIR}/final.config"
+
+          echo "============================================================"
+          echo "TARGET"
+          echo "============================================================"
+
+          grep '^CONFIG_TARGET_' .config
+
+          echo
+          echo "============================================================"
+          echo "PASSWALL"
+          echo "============================================================"
+
+          grep -E \
+            '^CONFIG_PACKAGE_(luci-app-passwall|xray-core|sing-box|geoview)=' \
+            .config \
+            || true
+
+          echo
+          echo "============================================================"
+          echo "NETWORK"
+          echo "============================================================"
+
+          grep -E \
+            '^CONFIG_PACKAGE_(wireguard-tools|kmod-wireguard|zerotier|luci-app-zerotier|ppp|ppp-mod-pppoe|ipv6helper)=' \
+            .config \
+            || true
+
+          echo
+          echo "============================================================"
+          echo "DOCKER CHECK"
+          echo "============================================================"
+
+          if grep -E \
+            '^CONFIG_PACKAGE_(docker|dockerd|containerd|docker-compose)=y|^CONFIG_PACKAGE_luci-app-dockerman=y' \
+            .config
+          then
+            echo "ERROR: Docker package enabled."
+            exit 1
+          fi
 
-      cp .config "${LOG_DIR}/final.config"
-
-      echo "============================================================"
-      echo "TARGET"
-      echo "============================================================"
-
-      grep '^CONFIG_TARGET_' .config
-
-      echo
-      echo "============================================================"
-      echo "PASSWALL"
-      echo "============================================================"
-
-      grep -E \
-        '^CONFIG_PACKAGE_(luci-app-passwall|xray-core|sing-box|geoview)=' \
-        .config \
-        || true
-
-      echo
-      echo "============================================================"
-      echo "WIREGUARD / ZEROTIER"
-      echo "============================================================"
-
-      grep -E \
-        '^CONFIG_PACKAGE_(wireguard-tools|kmod-wireguard|zerotier|luci-app-zerotier)=' \
-        .config \
-        || true
+          echo "Docker disabled."
 
-      echo
-      echo "============================================================"
-      echo "DOCKER CHECK"
-      echo "============================================================"
-
-      if grep -E \
-        '^CONFIG_PACKAGE_(docker|dockerd|containerd|docker-compose)=y|^CONFIG_PACKAGE_luci-app-dockerman=y' \
-        .config
-      then
-        echo "ERROR: Docker package enabled."
-        exit 1
-      fi
-
-      echo "Docker disabled."
-
-      echo
-      echo "============================================================"
-      echo "PASSWALL2 CHECK"
-      echo "============================================================"
-
-      if grep -q '^CONFIG_PACKAGE_luci-app-passwall2=y' .config; then
-        echo "ERROR: PassWall2 enabled."
-        exit 1
-      fi
-
-      echo "PassWall2 disabled."
-
-  - name: Download package sources
-    working-directory: ${{ env.OPENWRT_DIR }}
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      make download -j2 V=s 2>&1 \
-        | tee "${LOG_DIR}/download.log"
-
-  - name: Build OpenWrt
-    working-directory: ${{ env.OPENWRT_DIR }}
-    shell: bash
-    run: |
-      set +e
-
-      echo "============================================================"
-      echo "OPENWRT BUILD START"
-      echo "============================================================"
-
-      make -j"$(nproc)" V=s 2>&1 \
-        | tee "${LOG_DIR}/build.log"
-
-      BUILD_STATUS=${PIPESTATUS[0]}
-
-      echo "${BUILD_STATUS}" \
-        > "${LOG_DIR}/build-exit-code.txt"
-
-      echo
-      echo "BUILD EXIT CODE: ${BUILD_STATUS}"
-
-      if [ "${BUILD_STATUS}" -ne 0 ]; then
-
-        echo
-        echo "============================================================"
-        echo "LAST 300 BUILD LOG LINES"
-        echo "============================================================"
-
-        tail -n 300 \
-          "${LOG_DIR}/build.log" \
-          | tee "${LOG_DIR}/build-last-300-lines.txt"
-
-        exit "${BUILD_STATUS}"
-      fi
-
-  - name: Validate OpenWrt output
-    if: success()
-    working-directory: ${{ env.OPENWRT_DIR }}
-    shell: bash
-    run: |
-      set -euxo pipefail
-
-      find bin/targets \
-        -type f \
-        -printf '%p %s bytes\n' \
-        | tee "${LOG_DIR}/openwrt-output.txt"
-
-      ROOTFS="$(find bin/targets \
-        -type f \
-        -name '*rootfs.tar.gz' \
-        | head -n 1)"
-
-      test -n "${ROOTFS}"
-      test -f "${ROOTFS}"
-
-      SIZE="$(stat -c '%s' "${ROOTFS}")"
-
-      echo "Rootfs:"
-      echo "${ROOTFS}"
-
-      echo "Size:"
-      echo "${SIZE}"
-
-      test "${SIZE}" -gt 1000000
-
-      tar -tzf "${ROOTFS}" \
-        > "${LOG_DIR}/rootfs-file-list.txt"
-
-      sha256sum "${ROOTFS}" \
-        | tee "${LOG_DIR}/rootfs.sha256"
-
-  - name: Upload OpenWrt output
-    if: success()
-    uses: actions/upload-artifact@v4
-    with:
-      name: n1-openwrt-24.10.8-openwrt
-      path: |
-        ${{ env.OPENWRT_DIR }}/bin/targets/armvirt/64/
-      if-no-files-found: error
-      retention-days: 14
-      compression-level: 0
-      overwrite: true
-
-  - name: Package N1 with Flippy
-    if: success()
-    uses: ophub/flippy-openwrt-actions@main
-    env:
-      OPENWRT_ARMSR: ${{ env.OPENWRT_DIR }}/bin/targets/armvirt/64/*rootfs.tar.gz
-      PACKAGE_SOC: s905d
-      KERNEL_REPO_URL: breakingbadboy/OpenWrt
-      KERNEL_VERSION_NAME: 6.12.y
-      KERNEL_AUTO_LATEST: true
-      OPENWRT_IP: 192.168.1.1
-      WHOAMI: N1-OpenWrt
-      SW_FLOWOFFLOAD: 1
-      HW_FLOWOFFLOAD: 0
-      SFE_FLOW: 1
-      SAVE_OPENWRT_ROOTFS: true
-
-  - name: Collect final diagnostics
-    if: always()
-    shell: bash
-    run: |
-      set +e
-
-      echo "============================================================"
-      echo "FINAL DIAGNOSTICS"
-      echo "============================================================"
-
-      {
-        echo "Date:"
-        date -u
-        echo
-
-        echo "Workspace:"
-        pwd
-        echo
-
-        echo "Disk:"
-        df -h
-        echo
-
-        echo "OpenWrt:"
-        ls -lah "${OPENWRT_DIR}" 2>/dev/null || true
-        echo
-
-        echo "Logs:"
-        find "${LOG_DIR}" \
-          -type f \
-          -printf '%p %s bytes\n' \
-          | sort
-      } | tee "${LOG_DIR}/final-diagnostics.txt"
-
-      if [ -f "${LOG_DIR}/build.log" ]; then
-        tail -n 300 \
-          "${LOG_DIR}/build.log" \
-          > "${LOG_DIR}/build-last-300-lines.txt"
-      fi
-
-  - name: Upload build logs
-    if: always()
-    uses: actions/upload-artifact@v4
-    with:
-      name: n1-openwrt-24.10.8-build-logs
-      path: |
-        ${{ env.LOG_DIR }}/
-      if-no-files-found: error
-      retention-days: 14
-      compression-level: 6
-      overwrite: true
-      include-hidden-files: true
-
+          echo
+          echo "============================================================"
+          echo "PASSWALL2 CHECK"
+          echo "============================================================"
+
+          if grep -q '^CONFIG_PACKAGE_luci-app-passwall2=y' .config; then
+            echo "ERROR: PassWall2 enabled."
+            exit 1
+          fi
+
+          echo "PassWall2 disabled."
+
+      - name: Download package sources
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          make download -j2 V=s 2>&1 \
+            | tee "${LOG_DIR}/download.log"
+
+      - name: Build OpenWrt
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set +e
+
+          echo "============================================================"
+          echo "OPENWRT BUILD START"
+          echo "============================================================"
+
+          date -u
+
+          make -j"$(nproc)" V=s 2>&1 \
+            | tee "${LOG_DIR}/build.log"
+
+          BUILD_STATUS=${PIPESTATUS[0]}
+
+          echo "${BUILD_STATUS}" \
+            > "${LOG_DIR}/build-exit-code.txt"
+
+          echo
+          echo "============================================================"
+          echo "BUILD EXIT CODE: ${BUILD_STATUS}"
+          echo "============================================================"
+
+          if [ "${BUILD_STATUS}" -ne 0 ]; then
+
+            echo
+            echo "============================================================"
+            echo "LAST 300 BUILD LOG LINES"
+            echo "============================================================"
+
+            tail -n 300 \
+              "${LOG_DIR}/build.log" \
+              | tee "${LOG_DIR}/build-last-300-lines.txt"
+
+            exit "${BUILD_STATUS}"
+          fi
+
+      - name: Validate OpenWrt output
+        if: ${{ success() }}
+        working-directory: ${{ env.OPENWRT_DIR }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          find bin/targets \
+            -type f \
+            -printf '%p %s bytes\n' \
+            | tee "${LOG_DIR}/openwrt-output.txt"
+
+          ROOTFS="$(find bin/targets \
+            -type f \
+            -name '*rootfs.tar.gz' \
+            | head -n 1)"
+
+          test -n "${ROOTFS}"
+          test -f "${ROOTFS}"
+
+          SIZE="$(stat -c '%s' "${ROOTFS}")"
+
+          echo "Rootfs:"
+          echo "${ROOTFS}"
+
+          echo "Size:"
+          echo "${SIZE}"
+
+          test "${SIZE}" -gt 1000000
+
+          tar -tzf "${ROOTFS}" \
+            > "${LOG_DIR}/rootfs-file-list.txt"
+
+          sha256sum "${ROOTFS}" \
+            | tee "${LOG_DIR}/rootfs.sha256"
+
+      - name: Upload OpenWrt output
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: n1-openwrt-24.10.8-openwrt
+          path: ${{ env.OPENWRT_DIR }}/bin/targets/armvirt/64/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: true
+
+      - name: Package N1 with Flippy
+        if: ${{ success() }}
+        uses: ophub/flippy-openwrt-actions@main
+        env:
+          OPENWRT_ARMSR: ${{ env.OPENWRT_DIR }}/bin/targets/armvirt/64/*rootfs.tar.gz
+          PACKAGE_SOC: s905d
+          KERNEL_REPO_URL: breakingbadboy/OpenWrt
+          KERNEL_VERSION_NAME: 6.12.y
+          KERNEL_AUTO_LATEST: true
+          OPENWRT_IP: 192.168.1.1
+          WHOAMI: N1-OpenWrt
+          SW_FLOWOFFLOAD: 1
+          HW_FLOWOFFLOAD: 0
+          SFE_FLOW: 1
+          SAVE_OPENWRT_ROOTFS: true
+
+      - name: Collect diagnostics
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set +e
+
+          echo "============================================================"
+          echo "FINAL DIAGNOSTICS"
+          echo "============================================================"
+
+          {
+            echo "Date:"
+            date -u
+            echo
+            echo "Workspace:"
+            pwd
+            echo
+            echo "Disk:"
+            df -h
+            echo
+            echo "Logs:"
+            find "${LOG_DIR}" \
+              -type f \
+              -printf '%p %s bytes\n' \
+              | sort
+          } | tee "${LOG_DIR}/final-diagnostics.txt"
+
+          if [ -f "${LOG_DIR}/build.log" ]; then
+            tail -n 300 \
+              "${LOG_DIR}/build.log" \
+              > "${LOG_DIR}/build-last-300-lines.txt"
+          fi
+
+      - name: Upload build logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: n1-openwrt-24.10.8-build-logs
+          path: ${{ env.LOG_DIR }}/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
+          overwrite: true
+          include-hidden-files: true
