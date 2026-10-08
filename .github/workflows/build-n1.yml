@@ -1,5 +1,5 @@
 
-name: Build N1 OpenWrt 25.12.5 Clean
+name: Build N1 OpenWrt 25.12.5
 
 on:
   workflow_dispatch:
@@ -8,257 +8,703 @@ on:
       - main
     paths:
       - ".config"
+      - "feeds.conf.default"
       - ".github/workflows/build-n1.yml"
+
+permissions:
+  contents: read
 
 env:
   OPENWRT_REPO: https://github.com/openwrt/openwrt.git
   OPENWRT_TAG: v25.12.5
-  OPENWRT_DIR: openwrt
-  LOG_DIR: ${{ github.workspace }}/openwrt-logs
-  ARTIFACT_DIR: ${{ github.workspace }}/artifacts
+  OPENWRT_DIR: ${{ github.workspace }}/openwrt
+  LOG_DIR: ${{ github.workspace }}/build-logs
 
 jobs:
   build:
+    name: N1 OpenWrt 25.12.5
     runs-on: ubuntu-24.04
 
     steps:
 
       # ============================================================
-      # 1. Prepare build environment
+      # 1. Checkout
       # ============================================================
       - name: Checkout build repository
         uses: actions/checkout@v4
 
+      # ============================================================
+      # 2. Prepare build environment
+      # ============================================================
       - name: Prepare Ubuntu build environment
         shell: bash
         run: |
           set -euxo pipefail
 
-          echo "============================================================"
-          echo "Preparing Ubuntu build environment"
-          echo "============================================================"
-
           sudo apt-get update
 
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          sudo apt-get install -y \
             build-essential \
             clang \
             flex \
             bison \
             gawk \
+            gcc-multilib \
+            g++-multilib \
             gettext \
             git \
             libncurses-dev \
             libssl-dev \
             python3 \
-            python3-pip \
             python3-setuptools \
             rsync \
             unzip \
-            wget \
-            xsltproc \
             zlib1g-dev \
             file \
+            wget \
+            curl \
+            xsltproc \
+            swig \
             time \
-            jq \
-            ca-certificates \
-            curl
+            ecj \
+            fastjar \
+            java-propose-classpath \
+            libelf-dev \
+            libdw-dev \
+            patch \
+            quilt \
+            ccache
 
           mkdir -p "${LOG_DIR}"
-          mkdir -p "${ARTIFACT_DIR}"
 
-          echo
-          echo "Ubuntu:"
-          lsb_release -a || true
-
-          echo
-          echo "Kernel:"
+          echo "============================================================"
+          echo "BUILD HOST"
+          echo "============================================================"
           uname -a
 
           echo
           echo "CPU:"
           nproc
 
+          echo
+          echo "DISK:"
+          df -h
+
+          echo
+          echo "GIT:"
+          git --version
+
+          echo
+          echo "PYTHON:"
+          python3 --version
+
       # ============================================================
-      # 2. Validate user .config before cloning OpenWrt
+      # 3. Validate repository files
       # ============================================================
-      - name: Validate .config
+      - name: Validate repository configuration
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
           echo "============================================================"
-          echo "Validating .config"
+          echo "CHECK REPOSITORY FILES"
           echo "============================================================"
 
-          if [ ! -f ".config" ]; then
-            echo "ERROR: repository .config does not exist"
+          test -f "${GITHUB_WORKSPACE}/.config"
+          test -f "${GITHUB_WORKSPACE}/feeds.conf.default"
+
+          echo
+          echo "Repository:"
+          find "${GITHUB_WORKSPACE}" \
+            -maxdepth 3 \
+            -type f \
+            -not -path "*/.git/*" \
+            -print | sort
+
+          echo
+          echo "============================================================"
+          echo "INPUT TARGET"
+          echo "============================================================"
+
+          grep '^CONFIG_TARGET_' "${GITHUB_WORKSPACE}/.config" || true
+
+          echo
+          echo "============================================================"
+          echo "INPUT IPv6"
+          echo "============================================================"
+
+          grep -E \
+            '^CONFIG_PACKAGE_(odhcp6c|odhcpd-ipv6only|kmod-ipv6)' \
+            "${GITHUB_WORKSPACE}/.config" || true
+
+          echo
+          echo "============================================================"
+          echo "INPUT FEEDS"
+          echo "============================================================"
+
+          cat "${GITHUB_WORKSPACE}/feeds.conf.default"
+
+          echo
+          echo "============================================================"
+          echo "FORBIDDEN PACKAGES"
+          echo "============================================================"
+
+          if grep -E \
+            '^CONFIG_PACKAGE_(luci-app-passwall|luci-app-passwall2|xray-core|sing-box|wireguard-tools|luci-app-wireguard|zerotier|luci-app-zerotier|docker|dockerd|dockerman|containerd)' \
+            "${GITHUB_WORKSPACE}/.config"; then
+            echo "ERROR: Forbidden package detected."
             exit 1
           fi
 
-          sed -i 's/\r$//' .config
-
-          if grep -nE '^(#|```|name:|on:|jobs:|CONFIG.*https?://)' .config; then
-            echo
-            echo "ERROR: .config appears to contain Markdown/YAML/invalid content"
-            exit 1
-          fi
-
-          require_config() {
-            local symbol="$1"
-
-            if ! grep -Fqx -- "${symbol}" .config; then
-              echo
-              echo "ERROR: required config is missing:"
-              echo "  ${symbol}"
-              exit 1
-            fi
-          }
-
-          echo
-          echo "========== USER TARGET CONFIG =========="
-
-          require_config "CONFIG_TARGET_armsr=y"
-          require_config "CONFIG_TARGET_armsr_armv8=y"
-          require_config "CONFIG_TARGET_armsr_armv8_DEVICE_generic=y"
-
-          echo "Target configuration:"
-          grep '^CONFIG_TARGET_armsr' .config
-
-          echo
-          echo "========== FORBIDDEN TARGET CHECK =========="
-
-          if grep -nE '^CONFIG_TARGET_(ath79|armvirt|mips)(=y|=m)' .config; then
-            echo
-            echo "ERROR: forbidden target detected"
-            exit 1
-          fi
-
-          echo "No forbidden target detected."
-
-          echo
-          echo "========== FORBIDDEN PACKAGE CHECK =========="
-
-          if grep -nE '^CONFIG_PACKAGE_(luci-app-passwall|luci-app-passwall2|docker|dockerd|docker-compose|dockerman|containerd)=y' .config; then
-            echo
-            echo "ERROR: forbidden package enabled"
-            exit 1
-          fi
-
-          echo "No PassWall/Docker package enabled."
-
-          echo
-          echo "========== FULL USER .config =========="
-
-          cat .config
+          echo "Initial configuration validation passed."
 
       # ============================================================
-      # 3. Clone OpenWrt
+      # 4. Clone official OpenWrt 25.12.5
       # ============================================================
       - name: Clone OpenWrt 25.12.5
         shell: bash
         run: |
-          set -euo pipefail
-
-          echo "============================================================"
-          echo "Cloning OpenWrt"
-          echo "============================================================"
+          set -euxo pipefail
 
           rm -rf "${OPENWRT_DIR}"
 
           git clone \
-            --depth 1 \
+            --depth=1 \
             --branch "${OPENWRT_TAG}" \
             "${OPENWRT_REPO}" \
-            "${OPENWRT_DIR}"
+            "${OPENWRT_DIR}" \
+            2>&1 | tee "${LOG_DIR}/clone.log"
 
           cd "${OPENWRT_DIR}"
 
-          echo
-          echo "OpenWrt commit:"
+          echo "============================================================"
+          echo "OPENWRT VERSION"
+          echo "============================================================"
+
+          git describe --tags --always
           git log -1 --oneline
 
-          echo
-          echo "OpenWrt version:"
-          git describe --tags --always || true
-
       # ============================================================
-      # 4. Configure only official packages + luci feeds
+      # 5. Configure feeds
       # ============================================================
       - name: Configure official feeds
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
           cd "${OPENWRT_DIR}"
 
+          cp "${GITHUB_WORKSPACE}/feeds.conf.default" feeds.conf.default
+
           echo "============================================================"
-          echo "Configuring OpenWrt feeds"
+          echo "feeds.conf.default"
           echo "============================================================"
 
-          cat > feeds.conf.default <<'EOF'
-          src-git packages https://git.openwrt.org/feed/packages.git;openwrt-25.12
-          src-git luci https://git.openwrt.org/project/luci.git;openwrt-25.12
-          EOF
-
-          sed -i 's/^[[:space:]]*//' feeds.conf.default
-
-          echo
-          echo "========== feeds.conf.default =========="
           cat feeds.conf.default
 
-          echo
-          echo "========== Checking forbidden feeds =========="
-
-          if grep -nE '(^|[[:space:]])src-git[[:space:]]+(routing|telephony|video)[[:space:]]' feeds.conf.default; then
-            echo "ERROR: forbidden feed detected"
-            exit 1
-          fi
-
-          echo "Feed configuration looks correct."
-
       # ============================================================
-      # 5. Update packages feed
+      # 6. Update all feeds
       # ============================================================
-      - name: Update packages feed
+      - name: Update official feeds
         shell: bash
         run: |
-          set +e
+          set -o pipefail
 
           cd "${OPENWRT_DIR}"
 
-          echo "============================================================"
-          echo "Updating packages feed"
-          echo "============================================================"
-
-          ./scripts/feeds update packages \
-            2>&1 | tee "${LOG_DIR}/feeds-packages-update.log"
+          ./scripts/feeds update -a \
+            2>&1 | tee "${LOG_DIR}/feeds-update.log"
 
           status=${PIPESTATUS[0]}
 
           if [ "${status}" -ne 0 ]; then
-            echo
-            echo "============================================================"
-            echo "PACKAGES FEED UPDATE FAILED"
-            echo "============================================================"
-            tail -n 500 "${LOG_DIR}/feeds-packages-update.log" || true
+            echo "ERROR: feeds update failed."
             exit "${status}"
           fi
 
       # ============================================================
-      # 6. Update luci feed
+      # 7. Install all feeds
       # ============================================================
-      - name: Update luci feed
+      - name: Install official feeds
         shell: bash
         run: |
-          set +e
+          set -o pipefail
+
+          cd "${OPENWRT_DIR}"
+
+          ./scripts/feeds install -a \
+            2>&1 | tee "${LOG_DIR}/feeds-install.log"
+
+          status=${PIPESTATUS[0]}
+
+          if [ "${status}" -ne 0 ]; then
+            echo "ERROR: feeds install failed."
+            exit "${status}"
+          fi
+
+      # ============================================================
+      # 8. Apply configuration
+      # ============================================================
+      - name: Apply OpenWrt configuration
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "${OPENWRT_DIR}"
+
+          cp "${GITHUB_WORKSPACE}/.config" .config
+
+          echo "============================================================"
+          echo "CONFIG BEFORE DEFCONFIG"
+          echo "============================================================"
+
+          grep '^CONFIG_TARGET_' .config || true
+
+      # ============================================================
+      # 9. Defconfig
+      # ============================================================
+      - name: Run make defconfig
+        shell: bash
+        run: |
+          set -o pipefail
+
+          cd "${OPENWRT_DIR}"
+
+          make defconfig \
+            2>&1 | tee "${LOG_DIR}/defconfig.log"
+
+          status=${PIPESTATUS[0]}
+
+          if [ "${status}" -ne 0 ]; then
+            echo "ERROR: make defconfig failed."
+            exit "${status}"
+          fi
+
+      # ============================================================
+      # 10. Validate final configuration
+      # ============================================================
+      - name: Validate final target configuration
+        shell: bash
+        run: |
+          set -euxo pipefail
 
           cd "${OPENWRT_DIR}"
 
           echo "============================================================"
-          echo "Updating luci feed"
+          echo "FINAL TARGET"
           echo "============================================================"
 
-          ./scripts/feeds update luci \
-            2>&1 | tee "${LOG_DIR}/feeds-luci-update.log"_
+          grep '^CONFIG_TARGET_' .config
+
+          echo
+          echo "============================================================"
+          echo "ARMSR TARGET"
+          echo "============================================================"
+
+          grep -E \
+            '^CONFIG_TARGET_armsr|^CONFIG_TARGET_ROOTFS_TARGZ' \
+            .config
+
+          echo
+          echo "============================================================"
+          echo "IPv6"
+          echo "============================================================"
+
+          grep -E \
+            '^CONFIG_PACKAGE_(odhcp6c|odhcpd-ipv6only|kmod-ipv6)' \
+            .config
+
+          echo
+          echo "============================================================"
+          echo "FORBIDDEN PACKAGES"
+          echo "============================================================"
+
+          forbidden=0
+
+          for pkg in \
+            luci-app-passwall \
+            luci-app-passwall2 \
+            xray-core \
+            sing-box \
+            wireguard-tools \
+            luci-app-wireguard \
+            zerotier \
+            luci-app-zerotier \
+            docker \
+            dockerd \
+            dockerman \
+            containerd
+          do
+            if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+              echo "FORBIDDEN: ${pkg}"
+              forbidden=1
+            fi
+          done
+
+          if [ "${forbidden}" -ne 0 ]; then
+            echo "ERROR: Forbidden package detected."
+            exit 1
+          fi
+
+          echo
+          echo "============================================================"
+          echo "FINAL CONFIGURATION PASSED"
+          echo "============================================================"
+
+      # ============================================================
+      # 11. Download source packages
+      # ============================================================
+      - name: Download OpenWrt sources
+        shell: bash
+        run: |
+          set -o pipefail
+
+          cd "${OPENWRT_DIR}"
+
+          make download -j4 \
+            2>&1 | tee "${LOG_DIR}/download.log"
+
+          status=${PIPESTATUS[0]}
+
+          if [ "${status}" -ne 0 ]; then
+            echo "ERROR: make download failed."
+            exit "${status}"
+          fi
+
+      # ============================================================
+      # 12. Compile OpenWrt
+      # ============================================================
+      - name: Compile OpenWrt
+        shell: bash
+        run: |
+          set -o pipefail
+
+          cd "${OPENWRT_DIR}"
+
+          echo "============================================================"
+          echo "START OPENWRT BUILD"
+          echo "============================================================"
+
+          date
+          echo "CPU: $(nproc)"
+          echo
+
+          make -j2 V=s \
+            2>&1 | tee "${LOG_DIR}/build.log"
+
+          status=${PIPESTATUS[0]}
+
+          echo
+          echo "BUILD EXIT CODE: ${status}"
+
+          if [ "${status}" -ne 0 ]; then
+            echo
+            echo "============================================================"
+            echo "LAST 200 BUILD LOG LINES"
+            echo "============================================================"
+
+            tail -n 200 "${LOG_DIR}/build.log" || true
+
+            exit "${status}"
+          fi
+
+      # ============================================================
+      # 13. Verify OpenWrt output
+      # ============================================================
+      - name: Verify OpenWrt output
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "${OPENWRT_DIR}"
+
+          echo "============================================================"
+          echo "OPENWRT TARGET OUTPUT"
+          echo "============================================================"
+
+          find bin/targets \
+            -maxdepth 3 \
+            -type f \
+            -print | sort
+
+          echo
+          echo "============================================================"
+          echo "GENERIC ROOTFS"
+          echo "============================================================"
+
+          ROOTFS_FILES=(
+            bin/targets/*/*/*-generic-rootfs.tar.gz
+          )
+
+          if [ ! -e "${ROOTFS_FILES[0]}" ]; then
+            echo "ERROR: generic rootfs was not generated."
+            exit 1
+          fi
+
+          for file in "${ROOTFS_FILES[@]}"; do
+            echo "FOUND: ${file}"
+            ls -lh "${file}"
+            file "${file}"
+          done
+
+          echo
+          echo "============================================================"
+          echo "CHECKSUM"
+          echo "============================================================"
+
+          sha256sum \
+            bin/targets/*/*/*-generic-rootfs.tar.gz
+
+      # ============================================================
+      # 14. Prepare OPhub input
+      # ============================================================
+      - name: Prepare OPhub N1 input
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "${OPENWRT_DIR}"
+
+          mkdir -p output
+
+          rm -f output/*
+
+          cp -f \
+            bin/targets/*/*/*-generic-rootfs.tar.gz \
+            output/
+
+          cp -f .config output/config
+
+          echo "============================================================"
+          echo "OPHUB INPUT"
+          echo "============================================================"
+
+          ls -lah output/
+
+          test -f output/*-generic-rootfs.tar.gz
+
+      # ============================================================
+      # 15. Upload original OpenWrt files
+      # ============================================================
+      - name: Collect original OpenWrt firmware
+        if: always()
+        shell: bash
+        run: |
+          set +e
+
+          mkdir -p "${GITHUB_WORKSPACE}/artifacts/openwrt"
+
+          if [ -d "${OPENWRT_DIR}/bin/targets" ]; then
+            cp -av \
+              "${OPENWRT_DIR}/bin/targets/." \
+              "${GITHUB_WORKSPACE}/artifacts/openwrt/" \
+              || true
+          fi
+
+          echo "Original OpenWrt artifacts:"
+          find "${GITHUB_WORKSPACE}/artifacts/openwrt" \
+            -type f \
+            -print | sort
+
+      # ============================================================
+      # 16. Package N1 using current OPhub Action
+      # ============================================================
+      - name: Package N1 s905d with OPhub
+        id: ophub
+        uses: ophub/amlogic-s9xxx-openwrt@main
+        with:
+          openwrt_path: openwrt/output/*-generic-rootfs.tar.gz
+          openwrt_board: s905d
+          openwrt_kernel: 6.12.y_6.18.y
+          auto_kernel: true
+          kernel_repo: ophub/kernel
+          kernel_usage: stable
+          openwrt_ip: 192.168.1.1
+          openwrt_size: 256/1024
+          builder_name: N1-OpenWrt
+
+      # ============================================================
+      # 17. Verify OPhub output
+      # ============================================================
+      - name: Verify N1 packaged output
+        if: always()
+        shell: bash
+        run: |
+          set +e
+
+          echo "============================================================"
+          echo "OPHUB PACKAGE STATUS"
+          echo "============================================================"
+
+          echo "PACKAGED_STATUS=${PACKAGED_STATUS:-unknown}"
+          echo "PACKAGED_OUTPUTPATH=${PACKAGED_OUTPUTPATH:-unknown}"
+
+          echo
+          echo "============================================================"
+          echo "SEARCH OUTPUT"
+          echo "============================================================"
+
+          find "${GITHUB_WORKSPACE}" \
+            -type f \
+            \( \
+              -name "*.img" \
+              -o -name "*.img.gz" \
+              -o -name "*.img.xz" \
+              -o -name "*.img.zst" \
+              -o -name "*.7z" \
+              -o -name "*.zip" \
+            \) \
+            -not -path "*/.git/*" \
+            -print | sort
+
+      # ============================================================
+      # 18. Collect packaged N1 firmware
+      # ============================================================
+      - name: Collect N1 firmware
+        if: always()
+        shell: bash
+        run: |
+          set +e
+
+          mkdir -p "${GITHUB_WORKSPACE}/artifacts/n1"
+
+          if [ -n "${PACKAGED_OUTPUTPATH:-}" ] &&
+             [ -d "${PACKAGED_OUTPUTPATH}" ]; then
+
+            cp -av \
+              "${PACKAGED_OUTPUTPATH}/." \
+              "${GITHUB_WORKSPACE}/artifacts/n1/" \
+              || true
+          fi
+
+          echo
+          echo "Searching for packaged images..."
+
+          find "${GITHUB_WORKSPACE}" \
+            -type f \
+            \( \
+              -name "*.img" \
+              -o -name "*.img.gz" \
+              -o -name "*.img.xz" \
+              -o -name "*.img.zst" \
+              -o -name "*.7z" \
+              -o -name "*.zip" \
+            \) \
+            -not -path "*/.git/*" \
+            -not -path "*/artifacts/n1/*" \
+            -not -path "*/openwrt/bin/targets/*" \
+            -exec cp -av {} \
+              "${GITHUB_WORKSPACE}/artifacts/n1/" \; \
+            || true
+
+          echo
+          echo "N1 artifacts:"
+          find "${GITHUB_WORKSPACE}/artifacts/n1" \
+            -type f \
+            -print | sort
+
+      # ============================================================
+      # 19. Collect logs
+      # ============================================================
+      - name: Collect all build logs
+        if: always()
+        shell: bash
+        run: |
+          set +e
+
+          mkdir -p "${GITHUB_WORKSPACE}/artifacts/logs"
+
+          if [ -d "${LOG_DIR}" ]; then
+            cp -av \
+              "${LOG_DIR}/." \
+              "${GITHUB_WORKSPACE}/artifacts/logs/" \
+              || true
+          fi
+
+          if [ -f "${OPENWRT_DIR}/.config" ]; then
+            cp -av \
+              "${OPENWRT_DIR}/.config" \
+              "${GITHUB_WORKSPACE}/artifacts/logs/final.config" \
+              || true
+          fi
+
+          if [ -d "${OPENWRT_DIR}/output" ]; then
+            find "${OPENWRT_DIR}/output" \
+              -maxdepth 1 \
+              -type f \
+              -exec ls -lh {} \; \
+              > "${GITHUB_WORKSPACE}/artifacts/logs/ophub-input.txt" \
+              || true
+          fi
+
+          echo "============================================================"
+          echo "ALL LOG FILES"
+          echo "============================================================"
+
+          find "${GITHUB_WORKSPACE}/artifacts/logs" \
+            -type f \
+            -print | sort
+
+      # ============================================================
+      # 20. Upload firmware artifact
+      # ============================================================
+      - name: Upload firmware Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: n1-openwrt-25.12.5-firmware
+          path: |
+            artifacts/openwrt
+            artifacts/n1
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ============================================================
+      # 21. Upload logs artifact
+      # ============================================================
+      - name: Upload build logs Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: n1-openwrt-25.12.5-build-logs
+          path: artifacts/logs
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ============================================================
+      # 22. Final summary
+      # ============================================================
+      - name: Final build summary
+        if: always()
+        shell: bash
+        run: |
+          echo "============================================================"
+          echo "N1 OPENWRT 25.12.5 FINAL SUMMARY"
+          echo "============================================================"
+
+          echo "OpenWrt       : 25.12.5"
+          echo "Target        : armsr"
+          echo "Subtarget     : armv8"
+          echo "Profile       : generic"
+          echo "Board         : s905d"
+          echo "IPv6          : enabled"
+          echo "LuCI          : enabled"
+          echo "Argon         : enabled"
+          echo "Chinese       : enabled"
+          echo
+          echo "PassWall      : disabled"
+          echo "PassWall2     : disabled"
+          echo "Xray          : disabled"
+          echo "sing-box      : disabled"
+          echo "WireGuard     : disabled"
+          echo "ZeroTier      : disabled"
+          echo "Docker        : disabled"
+          echo
+          echo "============================================================"
+          echo "ARTIFACT FILES"
+          echo "============================================================"
+
+          find "${GITHUB_WORKSPACE}/artifacts" \
+            -type f \
+            -print 2>/dev/null | sort || true
 
