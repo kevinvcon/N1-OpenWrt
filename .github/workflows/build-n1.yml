@@ -22,17 +22,18 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
 
-      - name: Install Dependencies
+      - name: Install Dependencies (Official OpenWrt Prerequisites)
         run: |
           sudo apt-get update
+          # 扩充了官方源码所需的完整依赖列表
           sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
             gettext git java-propose-classpath libelf-dev libncurses5-dev \
             libncursesw5-dev libssl-dev python3 python3-distutils python3-setuptools \
-            python3-dev rsync subversion swig time xsltproc zlib1g-dev help2man
+            python3-dev rsync subversion swig time xsltproc zlib1g-dev help2man \
+            bison flex cmake libfuse-dev zstd unzip antlr3 gperf
 
       - name: Clone OpenWrt Source (25.12 branch)
         run: |
-          # 修复：直接克隆 25.12 分支，不要尝试 checkout 不存在的 tag
           git clone -b openwrt-25.12 --depth=1 https://github.com/openwrt/openwrt.git openwrt
 
       - name: Copy Config Files
@@ -49,6 +50,7 @@ jobs:
       - name: Verify Target and SSL Dependencies
         run: |
           cd openwrt
+          # 如果宿主机依赖检查仍然报错，可以强制覆盖，但推荐先安装完整的依赖
           make defconfig
           if ! grep -q "^CONFIG_TARGET_armvirt_64_Default=y" .config; then
             echo "❌ 致命错误：Target 配置未生效！"
