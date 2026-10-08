@@ -1,3 +1,4 @@
+
 name: Build N1 OpenWrt 25.12.5 Clean
 
 on:
@@ -88,7 +89,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================================
-      # 3. Validate configuration files before doing anything
+      # 3. Validate configuration
       # ============================================================
       - name: Validate build configuration
         shell: bash
@@ -100,6 +101,14 @@ jobs:
           echo "============================================================"
 
           test -f .config
+
+          echo
+          echo "Normalizing .config line endings..."
+
+          sed -i 's/\r$//' .config
+
+          echo
+          echo "Checking for Markdown contamination..."
 
           if grep -nE '^```|^\s*```' .config; then
             echo "ERROR: .config contains Markdown code fences."
@@ -118,25 +127,48 @@ jobs:
           echo
           echo "Checking exact N1 target..."
 
-          grep -qx 'CONFIG_TARGET_armsr=y' .config
-          grep -qx 'CONFIG_TARGET_armsr_armv8=y' .config
-          grep -qx 'CONFIG_TARGET_armsr_armv8_DEVICE_generic=y'
+          TARGET_OK=1
 
+          grep -q '^CONFIG_TARGET_armsr=y$' .config || TARGET_OK=0
+          grep -q '^CONFIG_TARGET_armsr_armv8=y$' .config || TARGET_OK=0
+          grep -q '^CONFIG_TARGET_armsr_armv8_DEVICE_generic=y$' .config || TARGET_OK=0
+
+          if [ "${TARGET_OK}" -ne 1 ]; then
+            echo
+            echo "ERROR: Expected armsr/armv8/generic target was not found."
+            echo
+            echo "Actual target configuration:"
+            grep '^CONFIG_TARGET_' .config || true
+            exit 1
+          fi
+
+          echo
           echo "N1 target configuration is correct."
 
           echo
-          echo "Checking that unwanted components are disabled..."
+          echo "Checking unwanted components..."
 
-          grep -qx 'CONFIG_PACKAGE_luci-app-passwall=n' .config
-          grep -qx 'CONFIG_PACKAGE_luci-app-passwall2=n' .config
-          grep -qx 'CONFIG_PACKAGE_zerotier=n' .config
-          grep -qx 'CONFIG_PACKAGE_docker=n' .config
-          grep -qx 'CONFIG_PACKAGE_dockerd=n' .config
-          grep -qx 'CONFIG_PACKAGE_docker-compose=n' .config
-          grep -qx 'CONFIG_PACKAGE_dockerman=n' .config
-          grep -qx 'CONFIG_PACKAGE_containerd=n' .config
+          for CONFIG_LINE in \
+            'CONFIG_PACKAGE_luci-app-passwall=n' \
+            'CONFIG_PACKAGE_luci-app-passwall2=n' \
+            'CONFIG_PACKAGE_zerotier=n' \
+            'CONFIG_PACKAGE_docker=n' \
+            'CONFIG_PACKAGE_dockerd=n' \
+            'CONFIG_PACKAGE_docker-compose=n' \
+            'CONFIG_PACKAGE_dockerman=n' \
+            'CONFIG_PACKAGE_containerd=n'
+          do
+            if grep -q "^${CONFIG_LINE}$" .config; then
+              echo "OK: ${CONFIG_LINE}"
+            else
+              echo "INFO: ${CONFIG_LINE} not explicitly present."
+            fi
+          done
 
-          echo "Clean configuration validation passed."
+          echo
+          echo "============================================================"
+          echo "CONFIG VALIDATION PASSED"
+          echo "============================================================"
 
       # ============================================================
       # 4. Clone official OpenWrt
@@ -169,7 +201,7 @@ jobs:
           git describe --tags --always
 
       # ============================================================
-      # 5. Install our minimal .config
+      # 5. Install .config
       # ============================================================
       - name: Install OpenWrt configuration
         shell: bash
@@ -189,7 +221,7 @@ jobs:
           echo "Configuration copied successfully."
 
       # ============================================================
-      # 6. Keep official OpenWrt feeds
+      # 6. Use official OpenWrt feeds only
       # ============================================================
       - name: Verify official feeds
         shell: bash
@@ -209,14 +241,12 @@ jobs:
           cat feeds.conf.default
 
           echo
-          echo "IMPORTANT:"
-          echo "No PassWall feed"
-          echo "No third-party feed"
-          echo "No custom feed"
-          echo "No external package repository"
+          echo "No PassWall feed."
+          echo "No third-party feed."
+          echo "No custom feed."
 
       # ============================================================
-      # 7. Update official feeds only
+      # 7. Update official feeds
       # ============================================================
       - name: Update official feeds
         shell: bash
@@ -233,7 +263,7 @@ jobs:
             2>&1 | tee "${LOG_DIR}/feeds-update.log"
 
       # ============================================================
-      # 8. Install official feeds only
+      # 8. Install official feeds
       # ============================================================
       - name: Install official feeds
         shell: bash
@@ -250,7 +280,7 @@ jobs:
             2>&1 | tee "${LOG_DIR}/feeds-install.log"
 
       # ============================================================
-      # 9. Run defconfig
+      # 9. Generate defconfig
       # ============================================================
       - name: Generate defconfig
         shell: bash
@@ -267,7 +297,7 @@ jobs:
             2>&1 | tee "${LOG_DIR}/defconfig.log"
 
       # ============================================================
-      # 10. HARD target verification
+      # 10. HARD target verification after defconfig
       # ============================================================
       - name: Verify final OpenWrt target
         shell: bash
@@ -281,28 +311,27 @@ jobs:
           cd "${OPENWRT_DIR}"
 
           echo
-          echo "Target:"
-          grep '^CONFIG_TARGET_' .config | grep -E 'armsr|armv8|generic' || true
+          echo "Target configuration:"
+          grep '^CONFIG_TARGET_' .config || true
 
           echo
-          echo "Build info:"
-          grep -E '^(CONFIG_TARGET_|CONFIG_ARCH|CONFIG_CPU)' .config || true
+          echo "Checking armsr / armv8 / generic..."
 
-          test "$(grep -c '^CONFIG_TARGET_armsr=y$' .config)" -eq 1
-          test "$(grep -c '^CONFIG_TARGET_armsr_armv8=y$' .config)" -eq 1
-          test "$(grep -c '^CONFIG_TARGET_armsr_armv8_DEVICE_generic=y$' .config)" -eq 1
+          grep -q '^CONFIG_TARGET_armsr=y$' .config
+          grep -q '^CONFIG_TARGET_armsr_armv8=y$' .config
+          grep -q '^CONFIG_TARGET_armsr_armv8_DEVICE_generic=y$' .config
 
-          if grep -q '^CONFIG_TARGET_ath79=' .config; then
+          if grep -q '^CONFIG_TARGET_ath79=y$' .config; then
             echo "ERROR: ath79 target detected."
             exit 1
           fi
 
-          if grep -q '^CONFIG_TARGET_ramips=' .config; then
+          if grep -q '^CONFIG_TARGET_ramips=y$' .config; then
             echo "ERROR: ramips target detected."
             exit 1
           fi
 
-          if grep -q '^CONFIG_TARGET_armvirt=' .config; then
+          if grep -q '^CONFIG_TARGET_armvirt=y$' .config; then
             echo "ERROR: armvirt target detected."
             exit 1
           fi
@@ -313,7 +342,7 @@ jobs:
           echo "============================================================"
 
       # ============================================================
-      # 11. Verify unwanted packages are not selected
+      # 11. Verify clean package selection
       # ============================================================
       - name: Verify clean package selection
         shell: bash
@@ -326,7 +355,7 @@ jobs:
           echo "VERIFYING CLEAN PACKAGE SELECTION"
           echo "============================================================"
 
-          for pkg in \
+          for PACKAGE_NAME in \
             luci-app-passwall \
             luci-app-passwall2 \
             zerotier \
@@ -336,16 +365,19 @@ jobs:
             dockerman \
             containerd
           do
-            if grep -q "^CONFIG_PACKAGE_${pkg}=y$" .config; then
-              echo "ERROR: unwanted package selected: ${pkg}"
+            if grep -q "^CONFIG_PACKAGE_${PACKAGE_NAME}=y$" .config; then
+              echo
+              echo "ERROR: unwanted package selected:"
+              echo "${PACKAGE_NAME}"
               exit 1
             fi
           done
 
-          echo "No PassWall / Docker / ZeroTier packages selected."
+          echo
+          echo "No PassWall / ZeroTier / Docker packages selected."
 
       # ============================================================
-      # 12. Download sources
+      # 12. Download source packages
       # ============================================================
       - name: Download OpenWrt sources
         shell: bash
@@ -362,7 +394,7 @@ jobs:
             2>&1 | tee "${LOG_DIR}/download.log"
 
       # ============================================================
-      # 13. Compile firmware
+      # 13. Compile OpenWrt
       # ============================================================
       - name: Compile OpenWrt
         shell: bash
@@ -412,7 +444,7 @@ jobs:
 
           if [ -z "${ROOTFS}" ]; then
             echo
-            echo "ERROR: N1 packaging rootfs not found."
+            echo "ERROR: Expected N1 rootfs archive was not found."
             echo
             echo "Available tar.gz files:"
             find "${OUTPUT_DIR}" \
@@ -421,7 +453,6 @@ jobs:
               -name '*.tar.gz' \
               -print \
               | sort
-
             exit 1
           fi
 
@@ -492,7 +523,7 @@ jobs:
             | tee "${LOG_DIR}/flippy-images-found.log"
 
           echo
-          echo "Searching for Flippy output directory..."
+          echo "Searching for Flippy output directories..."
 
           find "${GITHUB_WORKSPACE}" \
             -type d \
@@ -525,7 +556,7 @@ jobs:
             | sort
 
       # ============================================================
-      # 17. Save build logs
+      # 17. Collect build logs
       # ============================================================
       - name: Collect build logs
         if: always()
@@ -568,3 +599,4 @@ jobs:
           path: artifacts/
           if-no-files-found: warn
           compression-level: 6
+
