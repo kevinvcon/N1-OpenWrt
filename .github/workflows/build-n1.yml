@@ -22,11 +22,14 @@ jobs:
     steps:
 
       # ==========================================================
-      # 1. Prepare build environment
+      # 1. Checkout
       # ==========================================================
       - name: Checkout build repository
         uses: actions/checkout@v4
 
+      # ==========================================================
+      # 2. Build dependencies
+      # ==========================================================
       - name: Prepare Ubuntu build environment
         shell: bash
         run: |
@@ -63,12 +66,12 @@ jobs:
             curl
 
           echo
-          echo "Ubuntu build dependencies installed."
+          echo "Build dependencies installed successfully."
 
       # ==========================================================
-      # 2. Prepare directories
+      # 3. Prepare directories
       # ==========================================================
-      - name: Prepare log directories
+      - name: Prepare directories
         shell: bash
         run: |
           set -euo pipefail
@@ -80,7 +83,7 @@ jobs:
           echo "ARTIFACT_DIR=${ARTIFACT_DIR}"
 
       # ==========================================================
-      # 3. Validate repository .config
+      # 4. Validate repository .config
       # ==========================================================
       - name: Validate N1 configuration
         shell: bash
@@ -88,72 +91,60 @@ jobs:
           set -euo pipefail
 
           echo "============================================================"
-          echo "Validating .config"
+          echo "Validating repository .config"
           echo "============================================================"
 
           if [ ! -f ".config" ]; then
-            echo "ERROR: .config not found in repository root."
+            echo "ERROR: .config not found."
             exit 1
           fi
 
           sed -i 's/\r$//' .config
 
-          if grep -nE '```|^\[|^name:|^CONFIG_FILE|https?://' .config; then
+          if grep -nE '```|^\[|^name:|^on:|https?://' .config; then
             echo
-            echo "ERROR: .config appears to contain Markdown/YAML/URL content."
+            echo "ERROR: .config contains unexpected Markdown/YAML/URL content."
             exit 1
           fi
 
-          required_configs=(
-            "CONFIG_TARGET_armsr=y"
-            "CONFIG_TARGET_armsr_armv8=y"
-            "CONFIG_TARGET_armsr_armv8_DEVICE_generic=y"
-          )
+          require_config() {
+            local symbol="$1"
 
-          for item in "${required_configs[@]}"; do
-            if ! grep -qxF "${item}" .config; then
-              echo "ERROR: Missing required config: ${item}"
+            if ! grep -Fqx -- "${symbol}" .config; then
+              echo "ERROR: Required config missing:"
+              echo "  ${symbol}"
               exit 1
             fi
-          done
+          }
 
-          forbidden_configs=(
-            "CONFIG_TARGET_ath79"
-            "CONFIG_TARGET_armvirt"
-            "CONFIG_TARGET_mips"
-          )
-
-          for item in "${forbidden_configs[@]}"; do
-            if grep -q "^${item}=y" .config; then
-              echo "ERROR: Forbidden target detected: ${item}"
-              exit 1
-            fi
-          done
+          require_config "CONFIG_TARGET_armsr=y"
+          require_config "CONFIG_TARGET_armsr_armv8=y"
+          require_config "CONFIG_TARGET_armsr_armv8_DEVICE_generic=y"
 
           echo
-          echo "N1 target configuration:"
-          grep '^CONFIG_TARGET_' .config
+          echo "Required target symbols:"
+          grep '^CONFIG_TARGET_armsr' .config
 
           echo
           echo "Selected LuCI packages:"
           grep '^CONFIG_PACKAGE_luci' .config || true
 
           echo
-          echo "Docker / PassWall exclusions:"
+          echo "Explicit exclusions:"
           grep -E \
-            'CONFIG_PACKAGE_(docker|dockerd|docker-compose|dockerman|containerd|luci-app-passwall|luci-app-passwall2|zerotier)' \
+            '^CONFIG_PACKAGE_(luci-app-passwall|luci-app-passwall2|zerotier|docker|dockerd|docker-compose|dockerman|containerd)=' \
             .config || true
 
       # ==========================================================
-      # 4. Clone official OpenWrt
+      # 5. Clone official OpenWrt 25.12.5
       # ==========================================================
-      - name: Clone OpenWrt 25.12.5
+      - name: Clone official OpenWrt 25.12.5
         shell: bash
         run: |
           set -euo pipefail
 
           echo "============================================================"
-          echo "Cloning official OpenWrt"
+          echo "Cloning official OpenWrt ${OPENWRT_TAG}"
           echo "============================================================"
 
           rm -rf "${OPENWRT_DIR}"
@@ -171,47 +162,50 @@ jobs:
           git rev-parse HEAD
 
           echo
-          echo "OpenWrt version:"
-          git describe --tags --always || true
+          echo "OpenWrt tag:"
+          git describe --tags --always
 
       # ==========================================================
-      # 5. Replace feeds.conf.default
+      # 6. Configure ONLY matching OpenWrt 25.12 feeds
       #
-      # Only official packages + luci feeds.
-      # No routing / telephony / video / third-party feeds.
+      # IMPORTANT:
+      # Do NOT use master feeds with OpenWrt v25.12.5.
       # ==========================================================
-      - name: Configure minimal official feeds
+      - name: Configure OpenWrt 25.12 feeds
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "============================================================"
-          echo "Configuring minimal official feeds"
-          echo "============================================================"
-
           cd "${OPENWRT_DIR}"
 
+          echo "============================================================"
+          echo "Configuring OpenWrt 25.12 feeds"
+          echo "============================================================"
+
           cat > feeds.conf.default <<'EOF'
-          src-git packages https://git.openwrt.org/feed/packages.git
-          src-git luci https://git.openwrt.org/project/luci.git
+          src-git packages https://git.openwrt.org/feed/packages.git;openwrt-25.12
+          src-git luci https://git.openwrt.org/project/luci.git;openwrt-25.12
           EOF
 
           echo
-          echo "feeds.conf.default:"
+          echo "Final feeds.conf.default:"
           cat feeds.conf.default
 
           echo
-          echo "Checking feed configuration..."
+          echo "Checking for forbidden feeds..."
 
-          if grep -Eq 'routing|telephony|video|passwall|immortalwrt|lede|kenzok8|small|third' feeds.conf.default; then
-            echo "ERROR: Unexpected feed detected."
+          if grep -Eq 'routing|telephony|video|passwall|immortalwrt|lede|kenzok8|small' feeds.conf.default; then
+            echo "ERROR: Forbidden or third-party feed detected."
             exit 1
           fi
 
+          echo
+          echo "Feed configuration verified."
+
       # ==========================================================
-      # 6. Update packages feed
+      # 7. Update packages feed
       # ==========================================================
-      - name: Update official packages feed
+      - name: Update OpenWrt 25.12 packages feed
         shell: bash
         run: |
           set -u
@@ -221,12 +215,15 @@ jobs:
           LOG="${LOG_DIR}/feeds-packages-update.log"
 
           echo "============================================================"
-          echo "Updating official packages feed"
+          echo "Updating packages feed: openwrt-25.12"
           echo "============================================================"
 
           set +e
+
           ./scripts/feeds update packages 2>&1 | tee "${LOG}"
+
           STATUS=${PIPESTATUS[0]}
+
           set -e
 
           if [ "${STATUS}" -ne 0 ]; then
@@ -244,12 +241,12 @@ jobs:
           fi
 
           echo
-          echo "packages feed update completed successfully."
+          echo "packages feed update completed."
 
       # ==========================================================
-      # 7. Update LuCI feed
+      # 8. Update LuCI feed
       # ==========================================================
-      - name: Update official LuCI feed
+      - name: Update OpenWrt 25.12 LuCI feed
         shell: bash
         run: |
           set -u
@@ -259,12 +256,15 @@ jobs:
           LOG="${LOG_DIR}/feeds-luci-update.log"
 
           echo "============================================================"
-          echo "Updating official LuCI feed"
+          echo "Updating LuCI feed: openwrt-25.12"
           echo "============================================================"
 
           set +e
+
           ./scripts/feeds update luci 2>&1 | tee "${LOG}"
+
           STATUS=${PIPESTATUS[0]}
+
           set -e
 
           if [ "${STATUS}" -ne 0 ]; then
@@ -282,12 +282,50 @@ jobs:
           fi
 
           echo
-          echo "luci feed update completed successfully."
+          echo "luci feed update completed."
 
       # ==========================================================
-      # 8. Install only packages + luci package definitions
+      # 9. Verify feed branches
       # ==========================================================
-      - name: Install official feed packages
+      - name: Verify feed revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "${OPENWRT_DIR}"
+
+          echo "============================================================"
+          echo "Feed revisions"
+          echo "============================================================"
+
+          ./scripts/feeds list -s
+
+          echo
+          echo "packages feed HEAD:"
+          git -C feeds/packages rev-parse --abbrev-ref HEAD 2>/dev/null || true
+          git -C feeds/packages rev-parse HEAD
+
+          echo
+          echo "luci feed HEAD:"
+          git -C feeds/luci rev-parse --abbrev-ref HEAD 2>/dev/null || true
+          git -C feeds/luci rev-parse HEAD
+
+          echo
+          echo "Checking unwanted feeds..."
+
+          test ! -d feeds/routing
+          test ! -d feeds/telephony
+          test ! -d feeds/video
+
+          echo
+          echo "Feed verification passed."
+
+      # ==========================================================
+      # 10. Install ONLY required feed packages
+      #
+      # Do NOT install all packages from the feeds.
+      # ==========================================================
+      - name: Install required LuCI packages only
         shell: bash
         run: |
           set -u
@@ -297,18 +335,30 @@ jobs:
           LOG="${LOG_DIR}/feeds-install.log"
 
           echo "============================================================"
-          echo "Installing official packages + luci feeds"
+          echo "Installing only required LuCI packages"
           echo "============================================================"
 
           set +e
 
           {
-            echo "===== packages ====="
-            ./scripts/feeds install -a -p packages
+            echo "Installing luci..."
+            ./scripts/feeds install luci
 
             echo
-            echo "===== luci ====="
-            ./scripts/feeds install -a -p luci
+            echo "Installing luci-ssl..."
+            ./scripts/feeds install luci-ssl
+
+            echo
+            echo "Installing luci-proto-ipv6..."
+            ./scripts/feeds install luci-proto-ipv6
+
+            echo
+            echo "Installing luci-proto-ppp..."
+            ./scripts/feeds install luci-proto-ppp
+
+            echo
+            echo "Installing luci-i18n-base-zh-cn..."
+            ./scripts/feeds install luci-i18n-base-zh-cn
 
           } 2>&1 | tee "${LOG}"
 
@@ -319,7 +369,7 @@ jobs:
           if [ "${STATUS}" -ne 0 ]; then
             echo
             echo "============================================================"
-            echo "FEEDS INSTALL FAILED"
+            echo "REQUIRED FEED PACKAGE INSTALL FAILED"
             echo "Exit code: ${STATUS}"
             echo "============================================================"
 
@@ -331,47 +381,10 @@ jobs:
           fi
 
           echo
-          echo "Feed installation completed successfully."
+          echo "Required LuCI package installation completed."
 
       # ==========================================================
-      # 9. Show actual feed status
-      # ==========================================================
-      - name: Verify feed status
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "${OPENWRT_DIR}"
-
-          echo "============================================================"
-          echo "Installed feeds"
-          echo "============================================================"
-
-          ./scripts/feeds list
-
-          echo
-          echo "Checking unwanted feeds..."
-
-          if [ -d "feeds/routing" ]; then
-            echo "ERROR: routing feed exists."
-            exit 1
-          fi
-
-          if [ -d "feeds/telephony" ]; then
-            echo "ERROR: telephony feed exists."
-            exit 1
-          fi
-
-          if [ -d "feeds/video" ]; then
-            echo "ERROR: video feed exists."
-            exit 1
-          fi
-
-          echo
-          echo "Feed verification passed."
-
-      # ==========================================================
-      # 10. Copy .config
+      # 11. Copy .config
       # ==========================================================
       - name: Install N1 .config
         shell: bash
@@ -386,12 +399,14 @@ jobs:
 
           cd "${OPENWRT_DIR}"
 
+          sed -i 's/\r$//' .config
+
           echo
-          echo "Target config before defconfig:"
-          grep '^CONFIG_TARGET_' .config
+          echo "Target configuration before defconfig:"
+          grep '^CONFIG_TARGET_armsr' .config
 
       # ==========================================================
-      # 11. Generate defconfig
+      # 12. Generate defconfig
       # ==========================================================
       - name: Generate and verify defconfig
         shell: bash
@@ -407,8 +422,11 @@ jobs:
           echo "============================================================"
 
           set +e
+
           make defconfig 2>&1 | tee "${LOG}"
+
           STATUS=${PIPESTATUS[0]}
+
           set -e
 
           if [ "${STATUS}" -ne 0 ]; then
@@ -425,36 +443,52 @@ jobs:
 
           echo
           echo "============================================================"
-          echo "Final target configuration"
+          echo "FINAL TARGET CONFIG"
           echo "============================================================"
 
-          grep '^CONFIG_TARGET_' .config
+          grep '^CONFIG_TARGET_' .config || true
 
           echo
           echo "============================================================"
-          echo "Hard target verification"
+          echo "HARD TARGET VERIFICATION"
           echo "============================================================"
 
-          grep -qx 'CONFIG_TARGET_armsr=y' .config
-          grep -qx 'CONFIG_TARGET_armsr_armv8=y' .config
-          grep -qx 'CONFIG_TARGET_armsr_armv8_DEVICE_generic=y'
+          require_config() {
+            local symbol="$1"
+
+            if ! grep -Fqx -- "${symbol}" .config; then
+              echo
+              echo "ERROR: Required final target symbol is missing:"
+              echo "  ${symbol}"
+              echo
+              echo "Actual matching armsr symbols:"
+              grep '^CONFIG_TARGET_armsr' .config || true
+              exit 1
+            fi
+          }
+
+          require_config "CONFIG_TARGET_armsr=y"
+          require_config "CONFIG_TARGET_armsr_armv8=y"
+          require_config "CONFIG_TARGET_armsr_armv8_DEVICE_generic=y"
 
           echo
-          echo "Target verification PASSED."
+          echo "N1 target verification PASSED."
 
           echo
           echo "Checking forbidden targets..."
 
-          if grep -Eq '^CONFIG_TARGET_(ath79|armvirt|mips)=y' .config; then
-            echo "ERROR: Forbidden target detected after defconfig."
+          if grep -Eq '^CONFIG_TARGET_(ath79|armvirt|mips)(=y|=m)' .config; then
+            echo "ERROR: Forbidden target detected."
+            grep -E '^CONFIG_TARGET_(ath79|armvirt|mips)' .config || true
             exit 1
           fi
 
           echo
-          echo "Checking PassWall / Docker..."
+          echo "Checking forbidden packages..."
 
           if grep -Eq '^CONFIG_PACKAGE_(luci-app-passwall|luci-app-passwall2|docker|dockerd|docker-compose|dockerman|containerd)=y' .config; then
             echo "ERROR: Forbidden package enabled."
+            grep -E '^CONFIG_PACKAGE_(luci-app-passwall|luci-app-passwall2|docker|dockerd|docker-compose|dockerman|containerd)=' .config || true
             exit 1
           fi
 
@@ -462,7 +496,7 @@ jobs:
           echo "Configuration verification PASSED."
 
       # ==========================================================
-      # 12. Download sources
+      # 13. Download sources
       # ==========================================================
       - name: Download OpenWrt sources
         shell: bash
@@ -478,8 +512,11 @@ jobs:
           echo "============================================================"
 
           set +e
+
           make download -j8 V=s 2>&1 | tee "${LOG}"
+
           STATUS=${PIPESTATUS[0]}
+
           set -e
 
           if [ "${STATUS}" -ne 0 ]; then
@@ -495,10 +532,10 @@ jobs:
           fi
 
           echo
-          echo "Source download completed successfully."
+          echo "Source download completed."
 
       # ==========================================================
-      # 13. Build firmware
+      # 14. Build
       # ==========================================================
       - name: Build OpenWrt firmware
         shell: bash
@@ -510,13 +547,19 @@ jobs:
           LOG="${LOG_DIR}/build.log"
 
           echo "============================================================"
-          echo "Building OpenWrt 25.12.5"
-          echo "Target: armsr/armv8/generic"
+          echo "BUILDING OPENWRT"
+          echo "Version: ${OPENWRT_TAG}"
+          echo "Target: armsr"
+          echo "Subtarget: armv8"
+          echo "Profile: generic"
           echo "============================================================"
 
           set +e
+
           make -j2 V=s 2>&1 | tee "${LOG}"
+
           STATUS=${PIPESTATUS[0]}
+
           set -e
 
           if [ "${STATUS}" -ne 0 ]; then
@@ -527,7 +570,7 @@ jobs:
             echo "============================================================"
 
             echo
-            echo "Last 300 lines of build.log:"
+            echo "Last 300 lines:"
             tail -n 300 "${LOG}" || true
 
             exit "${STATUS}"
@@ -539,13 +582,13 @@ jobs:
           echo "============================================================"
 
           echo
-          echo "Target output directory:"
-          find bin/targets -maxdepth 3 -type f -print | sort
+          echo "Generated files:"
+          find bin/targets -type f -print | sort
 
       # ==========================================================
-      # 14. Verify expected N1 universal rootfs
+      # 15. Verify expected rootfs
       # ==========================================================
-      - name: Verify armsr rootfs
+      - name: Verify N1 rootfs input
         shell: bash
         run: |
           set -euo pipefail
@@ -553,21 +596,23 @@ jobs:
           ROOTFS="openwrt/bin/targets/armsr/armv8/openwrt-armsr-armv8-generic-rootfs.tar.gz"
 
           echo "============================================================"
-          echo "Verifying OpenWrt rootfs"
+          echo "VERIFYING ARMSR ROOTFS"
           echo "============================================================"
 
           if [ ! -f "${ROOTFS}" ]; then
             echo
             echo "ERROR: Expected rootfs not found:"
             echo "${ROOTFS}"
+
             echo
-            echo "Available target files:"
+            echo "Available files:"
             find openwrt/bin/targets -type f -print | sort
+
             exit 1
           fi
 
           echo
-          echo "ROOTFS FOUND:"
+          echo "ROOTFS:"
           ls -lh "${ROOTFS}"
 
           echo
@@ -575,12 +620,13 @@ jobs:
           sha256sum "${ROOTFS}"
 
       # ==========================================================
-      # 15. Package N1 with Flippy
+      # 16. Flippy N1 packaging
       # ==========================================================
       - name: Package N1 firmware with Flippy
         uses: ophub/flippy-openwrt-actions@main
         env:
           OPENWRT_ARMSR: openwrt/bin/targets/armsr/armv8/openwrt-armsr-armv8-generic-rootfs.tar.gz
+
           PACKAGE_SOC: s905d
           SCRIPT_S905D: mk_s905d_n1.sh
 
@@ -601,7 +647,7 @@ jobs:
           WHOAMI: OpenWrt-N1
 
       # ==========================================================
-      # 16. Collect all firmware files
+      # 17. Collect firmware
       # ==========================================================
       - name: Collect firmware artifacts
         if: always()
@@ -610,13 +656,12 @@ jobs:
           set -u
 
           echo "============================================================"
-          echo "Collecting firmware artifacts"
+          echo "COLLECTING FIRMWARE ARTIFACTS"
           echo "============================================================"
 
           mkdir -p "${ARTIFACT_DIR}"
 
-          echo
-          echo "Searching workspace..."
+          LIST="${ARTIFACT_DIR}/file-list.txt"
 
           find "${GITHUB_WORKSPACE}" \
             -type f \
@@ -628,30 +673,29 @@ jobs:
               -o -name '*rootfs.tar.gz' \
             \) \
             -print \
-            > "${ARTIFACT_DIR}/file-list.txt" || true
+            | sort \
+            > "${LIST}" || true
 
-          cat "${ARTIFACT_DIR}/file-list.txt" || true
+          echo
+          echo "Firmware files found:"
+          cat "${LIST}" || true
 
           while IFS= read -r file; do
             [ -f "${file}" ] || continue
 
             base="$(basename "${file}")"
 
-            if [ "${base}" = "file-list.txt" ]; then
-              continue
-            fi
-
             cp -f "${file}" "${ARTIFACT_DIR}/${base}" || true
-          done < "${ARTIFACT_DIR}/file-list.txt"
+          done < "${LIST}"
 
           echo
-          echo "Artifacts collected:"
+          echo "Collected artifacts:"
           find "${ARTIFACT_DIR}" -maxdepth 1 -type f -printf '%f %s bytes\n' | sort || true
 
       # ==========================================================
-      # 17. Collect logs
+      # 18. Collect logs
       # ==========================================================
-      - name: Collect build logs
+      - name: Collect logs
         if: always()
         shell: bash
         run: |
@@ -663,30 +707,35 @@ jobs:
             cp -a "${LOG_DIR}/." "${ARTIFACT_DIR}/logs/" || true
           fi
 
-          if [ -d "${OPENWRT_DIR}" ]; then
-            {
-              echo "============================================================"
-              echo "OpenWrt Git commit"
-              echo "============================================================"
-              git -C "${OPENWRT_DIR}" rev-parse HEAD 2>/dev/null || true
+          {
+            echo "============================================================"
+            echo "N1 OpenWrt Build Summary"
+            echo "============================================================"
 
-              echo
-              echo "============================================================"
-              echo "Final target"
-              echo "============================================================"
-              grep '^CONFIG_TARGET_' "${OPENWRT_DIR}/.config" 2>/dev/null || true
+            echo
+            echo "OpenWrt:"
+            echo "${OPENWRT_TAG}"
 
-              echo
-              echo "============================================================"
-              echo "Target files"
-              echo "============================================================"
-              find "${OPENWRT_DIR}/bin/targets" -type f -print 2>/dev/null | sort || true
+            echo
+            echo "Repository:"
+            echo "${OPENWRT_REPO}"
 
-            } > "${ARTIFACT_DIR}/logs/build-summary.txt"
-          fi
+            echo
+            echo "Commit:"
+            git -C "${OPENWRT_DIR}" rev-parse HEAD 2>/dev/null || true
+
+            echo
+            echo "Final target:"
+            grep '^CONFIG_TARGET_' "${OPENWRT_DIR}/.config" 2>/dev/null || true
+
+            echo
+            echo "Generated target files:"
+            find "${OPENWRT_DIR}/bin/targets" -type f -print 2>/dev/null | sort || true
+
+          } > "${ARTIFACT_DIR}/logs/build-summary.txt"
 
       # ==========================================================
-      # 18. Upload artifacts
+      # 19. Upload artifacts
       # ==========================================================
       - name: Upload N1 firmware and logs
         if: always()
