@@ -1,4 +1,4 @@
-```yaml
+
 name: Build N1 OpenWrt 25.12.5
 
 on:
@@ -550,4 +550,4 @@ jobs:
             openwrt/feeds.conf.default
           if-no-files-found: warn
           retention-days: 30
-```
+
