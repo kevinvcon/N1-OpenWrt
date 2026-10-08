@@ -71,16 +71,23 @@ jobs:
           make download -j8
           make -j$(nproc) || make -j1 V=s
 
-      - name: List Compiled Artifacts
+      - name: Check rootfs file size
         run: |
-          echo "===== 编译产物清单 ====="
-          ls -lh ${{ github.workspace }}/openwrt/bin/targets/armsr/armv8/
-          echo "========================="
+          ROOTFS="${{ github.workspace }}/openwrt/bin/targets/armsr/armv8/openwrt-armsr-armv8-generic-rootfs.tar.gz"
+          echo "===== Rootfs 文件信息 ====="
+          ls -lh "$ROOTFS" || true
+          file "$ROOTFS" || true
+          SIZE=$(stat -c %s "$ROOTFS" 2>/dev/null || echo 0)
+          echo "文件大小: $SIZE 字节"
+          if [ "$SIZE" -lt 10485760 ]; then
+            echo "❌ 致命错误：rootfs.tar.gz 小于 10MB，编译不完整！"
+            exit 1
+          fi
+          echo "✅ rootfs 大小正常"
 
       - name: Package OpenWrt Firmware
         uses: ophub/flippy-openwrt-actions@main
         env:
-          # 修复：使用绝对路径，精确指向编译产物
           OPENWRT_ARMSR: ${{ github.workspace }}/openwrt/bin/targets/armsr/armv8/openwrt-armsr-armv8-generic-rootfs.tar.gz
           PACKAGE_SOC: s905d
           KERNEL_VERSION_NAME: 6.12.y
