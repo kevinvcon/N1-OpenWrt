@@ -47,11 +47,12 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Verify Target and SSL Dependencies
+            - name: Verify Target and SSL Dependencies
         run: |
           cd openwrt
-          # 如果宿主机依赖检查仍然报错，可以强制覆盖，但推荐先安装完整的依赖
-          make defconfig
+          # 核心修改：加上 FORCE=1 强制跳过宿主机依赖检查
+          make defconfig FORCE=1
+          
           if ! grep -q "^CONFIG_TARGET_armvirt_64_Default=y" .config; then
             echo "❌ 致命错误：Target 配置未生效！"
             grep '^CONFIG_TARGET_' .config
@@ -62,7 +63,6 @@ jobs:
             exit 1
           fi
           echo "✅ Target 与 SSL 依赖验证通过！"
-
       - name: Compile the Firmware
         run: |
           cd openwrt
