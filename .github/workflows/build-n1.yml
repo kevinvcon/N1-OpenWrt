@@ -25,6 +25,7 @@ jobs:
       - name: Install Dependencies (Official OpenWrt Prerequisites)
         run: |
           sudo apt-get update
+          # 包含官方源码所需的全量编译工具
           sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
             gettext git java-propose-classpath libelf-dev libncurses5-dev \
             libncursesw5-dev libssl-dev python3 python3-distutils python3-setuptools \
@@ -33,6 +34,7 @@ jobs:
 
       - name: Clone OpenWrt Source (25.12 branch)
         run: |
+          # 直接克隆 25.12 分支，不要 checkout 不存在的 tag
           git clone -b openwrt-25.12 --depth=1 https://github.com/openwrt/openwrt.git openwrt
 
       - name: Copy Config Files
@@ -49,18 +51,21 @@ jobs:
       - name: Verify Target and SSL Dependencies
         run: |
           cd openwrt
-          # 手动生成依赖检查 stamp 文件，彻底绕过前置条件检查
+          # 核心修复：生成依赖检查的 stamp 文件，彻底绕过 OpenWrt 的宿主机环境检查
           mkdir -p staging_dir/host
           touch staging_dir/host/.prereq-build
-          # 通过 MAKEFLAGS 注入 FORCE=1 作为双保险
-          export MAKEFLAGS="FORCE=1"
+          
+          # 执行 make defconfig 生成最终配置
           make defconfig
           
+          # 验证 Target 是否为 armvirt/64
           if ! grep -q "^CONFIG_TARGET_armvirt_64_Default=y" .config; then
             echo "❌ 致命错误：Target 配置未生效！"
             grep '^CONFIG_TARGET_' .config
             exit 1
           fi
+          
+          # 验证 uhttpd 和 SSL 库，防止网页打不开
           if ! grep -q "^CONFIG_PACKAGE_uhttpd=y" .config || ! grep -q "^CONFIG_PACKAGE_libustream-openssl=y" .config; then
             echo "❌ 致命错误：uhttpd 或 SSL 依赖丢失！"
             exit 1
@@ -70,15 +75,18 @@ jobs:
       - name: Compile the Firmware
         run: |
           cd openwrt
-          export MAKEFLAGS="FORCE=1"
           make download -j8
+          # 如果并行编译失败，则用单线程编译并输出详细日志
           make -j$(nproc) || make -j1 V=s
 
       - name: Package OpenWrt Firmware
         uses: ophub/flippy-openwrt-actions@main
         env:
+          # 输入编译生成的通用 rootfs
           OPENWRT_ARMVIRT: openwrt/bin/targets/armvirt/64/*.tar.gz
+          # 指定 SOC 为 N1 的 s905d
           PACKAGE_SOC: s905d
+          # 指定内核版本
           KERNEL_VERSION_NAME: 6.12.y
           KERNEL_AUTO_LATEST: true
 
@@ -86,5 +94,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: N1-OpenWrt-25.12-Firmware
+          # 使用 Flippy 打包后的绝对路径
           path: /opt/openwrt_packit/output/*
           if-no-files-found: error
