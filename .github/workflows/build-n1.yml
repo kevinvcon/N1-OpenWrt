@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   OPENWRT_REPO: https://github.com/openwrt/openwrt.git
@@ -15,20 +15,20 @@ env:
 
 jobs:
   build:
-    name: Build OpenWrt for N1
+    name: Build OpenWrt for Phicomm N1
     runs-on: ubuntu-24.04
 
     steps:
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 1. Checkout configuration repository
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Checkout configuration
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 2. Prepare build environment
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Prepare Ubuntu
         shell: bash
         run: |
@@ -78,16 +78,20 @@ jobs:
             time
 
           echo
-          echo "Ubuntu version:"
+          echo "Ubuntu:"
           lsb_release -a || true
+
+          echo
+          echo "CPU:"
+          nproc
 
           echo
           echo "Disk:"
           df -h
 
-      # ------------------------------------------------------------
-      # 3. Create log directory
-      # ------------------------------------------------------------
+      # ============================================================
+      # 3. Initialize logs
+      # ============================================================
       - name: Initialize logs
         shell: bash
         run: |
@@ -97,11 +101,12 @@ jobs:
           sudo mkdir -p "${LOG_DIR}"
           sudo chmod 777 "${LOG_DIR}"
 
-          echo "Log directory: ${LOG_DIR}"
+          echo "Log directory:"
+          echo "${LOG_DIR}"
 
-      # ------------------------------------------------------------
-      # 4. Clone official OpenWrt 25.12.5
-      # ------------------------------------------------------------
+      # ============================================================
+      # 4. Clone OpenWrt 25.12.5
+      # ============================================================
       - name: Clone OpenWrt
         shell: bash
         run: |
@@ -122,13 +127,13 @@ jobs:
           git rev-parse HEAD
 
           echo
-          echo "OpenWrt tag:"
+          echo "OpenWrt version:"
           git describe --tags --always || true
 
-      # ------------------------------------------------------------
-      # 5. Install configuration files
-      # ------------------------------------------------------------
-      - name: Install OpenWrt configuration
+      # ============================================================
+      # 5. Install .config and feeds
+      # ============================================================
+      - name: Install configuration
         shell: bash
         run: |
           set -euxo pipefail
@@ -139,17 +144,18 @@ jobs:
           cp .config "${OPENWRT_DIR}/.config"
           cp feeds.conf.default "${OPENWRT_DIR}/feeds.conf.default"
 
+          echo
           echo "============================================================"
-          echo "Target configuration"
+          echo "Initial target configuration"
           echo "============================================================"
 
           grep -E \
-            'CONFIG_TARGET_|CONFIG_TARGET_ROOTFS|CONFIG_PACKAGE_luci|CONFIG_LUCI_LANG' \
+            'CONFIG_TARGET_|CONFIG_TARGET_ROOTFS|CONFIG_PACKAGE_luci|CONFIG_PACKAGE_wireguard|CONFIG_PACKAGE_zerotier|CONFIG_LUCI_LANG' \
             "${OPENWRT_DIR}/.config" || true
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 6. Update feeds
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Update feeds
         shell: bash
         working-directory: ${{ env.OPENWRT_DIR }}
@@ -157,14 +163,15 @@ jobs:
           set -o pipefail
 
           echo "============================================================"
-          echo "Updating OpenWrt feeds"
+          echo "Updating feeds"
           echo "============================================================"
 
-          ./scripts/feeds update -a 2>&1 | tee "${LOG_DIR}/feeds-update.log"
+          ./scripts/feeds update -a 2>&1 \
+            | tee "${LOG_DIR}/feeds-update.log"
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 7. Install feeds
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Install feeds
         shell: bash
         working-directory: ${{ env.OPENWRT_DIR }}
@@ -172,14 +179,15 @@ jobs:
           set -o pipefail
 
           echo "============================================================"
-          echo "Installing OpenWrt feeds"
+          echo "Installing feeds"
           echo "============================================================"
 
-          ./scripts/feeds install -a 2>&1 | tee "${LOG_DIR}/feeds-install.log"
+          ./scripts/feeds install -a 2>&1 \
+            | tee "${LOG_DIR}/feeds-install.log"
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 8. Validate target
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Validate target
         shell: bash
         working-directory: ${{ env.OPENWRT_DIR }}
@@ -187,19 +195,24 @@ jobs:
           set -euxo pipefail
 
           echo "============================================================"
-          echo "Validating target"
+          echo "Validating N1 build target"
           echo "============================================================"
 
           grep -q '^CONFIG_TARGET_armsr=y$' .config
           grep -q '^CONFIG_TARGET_armsr_armv8=y$' .config
-          grep -q '^CONFIG_TARGET_DEVICE_armsr_armv8_DEVICE_generic=y$' .config
-          grep -q '^CONFIG_TARGET_ROOTFS_TARGZ=y$' .config
+          grep -q '^CONFIG_TARGET_DEVICE_armsr_armv8_DEVICE_generic=y$'
+          grep -q '^CONFIG_TARGET_ROOTFS_TARGZ=y$'
 
+          echo
+          echo "Target:"
+          grep '^CONFIG_TARGET_' .config
+
+          echo
           echo "Target validation: OK"
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 9. Generate final configuration
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Generate defconfig
         shell: bash
         working-directory: ${{ env.OPENWRT_DIR }}
@@ -210,7 +223,8 @@ jobs:
           echo "Running make defconfig"
           echo "============================================================"
 
-          make defconfig 2>&1 | tee "${LOG_DIR}/defconfig.log"
+          make defconfig 2>&1 \
+            | tee "${LOG_DIR}/defconfig.log"
 
           echo
           echo "============================================================"
@@ -218,12 +232,24 @@ jobs:
           echo "============================================================"
 
           grep -E \
-            'CONFIG_TARGET_|CONFIG_PACKAGE_luci|CONFIG_PACKAGE_wireguard|CONFIG_PACKAGE_zerotier|CONFIG_LUCI_LANG' \
+            'CONFIG_TARGET_|CONFIG_PACKAGE_luci|CONFIG_PACKAGE_wireguard|CONFIG_PACKAGE_zerotier|CONFIG_PACKAGE_luci-theme-argon|CONFIG_LUCI_LANG' \
             .config || true
 
-      # ------------------------------------------------------------
+          echo
+          echo "============================================================"
+          echo "Checking required packages"
+          echo "============================================================"
+
+          grep -q '^CONFIG_PACKAGE_luci=y$' .config
+          grep -q '^CONFIG_PACKAGE_luci-theme-argon=y$'
+          grep -q '^CONFIG_PACKAGE_wireguard-tools=y$'
+          grep -q '^CONFIG_PACKAGE_zerotier=y'
+
+          echo "Required package configuration: OK"
+
+      # ============================================================
       # 10. Download sources
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Download sources
         shell: bash
         working-directory: ${{ env.OPENWRT_DIR }}
@@ -234,11 +260,12 @@ jobs:
           echo "Downloading source packages"
           echo "============================================================"
 
-          make download -j2 V=s 2>&1 | tee "${LOG_DIR}/download.log"
+          make download -j2 V=s 2>&1 \
+            | tee "${LOG_DIR}/download.log"
 
-      # ------------------------------------------------------------
-      # 11. Compile
-      # ------------------------------------------------------------
+      # ============================================================
+      # 11. Compile OpenWrt
+      # ============================================================
       - name: Build OpenWrt
         shell: bash
         working-directory: ${{ env.OPENWRT_DIR }}
@@ -249,6 +276,7 @@ jobs:
           echo "Starting OpenWrt build"
           echo "============================================================"
 
+          echo
           echo "CPU:"
           nproc
 
@@ -257,22 +285,23 @@ jobs:
           df -h
 
           echo
-          echo "Build started:"
+          echo "Build start:"
           date
 
-          make -j"$(nproc)" V=s 2>&1 | tee "${LOG_DIR}/build.log"
+          make -j"$(nproc)" V=s 2>&1 \
+            | tee "${LOG_DIR}/build.log"
 
           BUILD_STATUS=${PIPESTATUS[0]}
 
           echo
-          echo "Build finished:"
+          echo "Build end:"
           date
 
           exit "${BUILD_STATUS}"
 
-      # ------------------------------------------------------------
-      # 12. Diagnose failed build
-      # ------------------------------------------------------------
+      # ============================================================
+      # 12. Show build failure
+      # ============================================================
       - name: Show build failure
         if: failure()
         shell: bash
@@ -293,48 +322,148 @@ jobs:
 
           echo
           echo "============================================================"
-          echo "AVAILABLE LOG FILES"
+          echo "LOG FILES"
           echo "============================================================"
 
-          find "${LOG_DIR}" -maxdepth 2 -type f -print 2>/dev/null || true
+          find "${LOG_DIR}" \
+            -maxdepth 2 \
+            -type f \
+            -printf '%p %s bytes\n' \
+            2>/dev/null || true
 
-      # ------------------------------------------------------------
-      # 13. Locate rootfs
-      # ------------------------------------------------------------
-      - name: Locate OpenWrt rootfs
+      # ============================================================
+      # 13. Locate and validate rootfs
+      # ============================================================
+      - name: Validate OpenWrt rootfs
         if: success()
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           echo "============================================================"
-          echo "Searching for OpenWrt rootfs"
+          echo "Locating OpenWrt ARMv8 rootfs"
           echo "============================================================"
 
-          find "${OPENWRT_DIR}/bin/targets" \
+          TARGET_DIR="${OPENWRT_DIR}/bin/targets/armsr/armv8"
+
+          if [ ! -d "${TARGET_DIR}" ]; then
+            echo
+            echo "ERROR: Target directory does not exist:"
+            echo "${TARGET_DIR}"
+            exit 1
+          fi
+
+          echo
+          echo "Generated target files:"
+          find "${TARGET_DIR}" \
+            -maxdepth 1 \
             -type f \
-            \( -name '*rootfs.tar.gz' -o -name '*targz-rootfs.tar.gz' \) \
-            -print
+            -printf '%f %s bytes\n' \
+            | sort
 
-          ROOTFS="$(find "${OPENWRT_DIR}/bin/targets" \
+          ROOTFS="$(find "${TARGET_DIR}" \
+            -maxdepth 1 \
             -type f \
             -name '*rootfs.tar.gz' \
             | head -n 1)"
 
           if [ -z "${ROOTFS}" ]; then
-            echo "ERROR: OpenWrt rootfs.tar.gz not found."
+            echo
+            echo "ERROR: No rootfs.tar.gz found."
             exit 1
           fi
-
-          echo "ROOTFS=${ROOTFS}" >> "${GITHUB_ENV}"
 
           echo
           echo "Selected rootfs:"
           echo "${ROOTFS}"
 
-      # ------------------------------------------------------------
-      # 14. Show generated files
-      # ------------------------------------------------------------
+          ROOTFS_SIZE="$(stat -c '%s' "${ROOTFS}")"
+
+          echo
+          echo "Rootfs size:"
+          echo "${ROOTFS_SIZE} bytes"
+
+          echo
+          echo "Testing gzip:"
+          gzip -t "${ROOTFS}"
+          echo "gzip: OK"
+
+          echo
+          echo "Testing tar:"
+          tar -tzf "${ROOTFS}" >/dev/null
+          echo "tar: OK"
+
+          echo
+          echo "Checking root filesystem directories:"
+
+          for DIR in \
+            "./bin/" \
+            "./etc/" \
+            "./lib/" \
+            "./root/" \
+            "./sbin/" \
+            "./usr/"
+          do
+            if tar -tzf "${ROOTFS}" "${DIR}" >/dev/null 2>&1; then
+              echo "OK: ${DIR}"
+            else
+              echo "ERROR: Missing ${DIR}"
+              exit 1
+            fi
+          done
+
+          echo
+          echo "============================================================"
+          echo "Checking Flippy minimum rootfs size"
+          echo "============================================================"
+
+          if [ "${ROOTFS_SIZE}" -lt 10485760 ]; then
+            echo
+            echo "ERROR: rootfs is smaller than 10 MiB."
+            echo
+            echo "This rootfs is too small for the current Flippy packager."
+            echo
+            echo "This usually means the selected packages were not included."
+            echo
+            echo "Current rootfs:"
+            echo "${ROOTFS_SIZE} bytes"
+            echo
+            echo "Required:"
+            echo "10485760 bytes"
+            exit 1
+          fi
+
+          echo "Rootfs size check: OK"
+
+          # Normalize the filename expected by Flippy.
+          mkdir -p "${GITHUB_WORKSPACE}/flippy-input"
+
+          NORMALIZED_ROOTFS="${GITHUB_WORKSPACE}/flippy-input/openwrt-armsr-armv8-generic-rootfs.tar.gz"
+
+          cp -f "${ROOTFS}" "${NORMALIZED_ROOTFS}"
+
+          NORMALIZED_SIZE="$(stat -c '%s' "${NORMALIZED_ROOTFS}")"
+
+          echo
+          echo "Normalized rootfs:"
+          echo "${NORMALIZED_ROOTFS}"
+
+          echo
+          echo "Normalized size:"
+          echo "${NORMALIZED_SIZE} bytes"
+
+          test "${NORMALIZED_SIZE}" -ge 10485760
+
+          echo "NORMALIZED_ROOTFS=${NORMALIZED_ROOTFS}" >> "${GITHUB_ENV}"
+
+          echo
+          echo "============================================================"
+          echo "ROOTFS VALIDATION SUCCESS"
+          echo "============================================================"
+
+      # ============================================================
+      # 14. Show OpenWrt output
+      # ============================================================
       - name: Show OpenWrt output
         if: success()
         shell: bash
@@ -342,23 +471,23 @@ jobs:
           set -euxo pipefail
 
           echo "============================================================"
-          echo "OpenWrt build output"
+          echo "OpenWrt output"
           echo "============================================================"
 
           find "${OPENWRT_DIR}/bin/targets" \
-            -maxdepth 4 \
             -type f \
-            -printf '%p %k KB\n' \
+            -printf '%p %s bytes\n' \
             | sort
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 15. Package N1 with current Flippy interface
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Package N1 with Flippy
         if: success()
         uses: ophub/flippy-openwrt-actions@main
         env:
-          OPENWRT_ARMSR: ${{ env.ROOTFS }}
+          OPENWRT_ARMSR: ${{ env.NORMALIZED_ROOTFS }}
+
           PACKAGE_SOC: s905d
 
           KERNEL_REPO_URL: breakingbadboy/OpenWrt
@@ -372,49 +501,57 @@ jobs:
           GZIP_IMGS: gz
           SAVE_OPENWRT_ROOTFS: true
 
-      # ------------------------------------------------------------
-      # 16. Show Flippy output
-      # ------------------------------------------------------------
-      - name: Show packaged firmware
+      # ============================================================
+      # 16. Show Flippy result
+      # ============================================================
+      - name: Show Flippy output
         if: success()
         shell: bash
         run: |
           set -euxo pipefail
 
           echo "============================================================"
-          echo "Flippy package output"
+          echo "Flippy output"
           echo "============================================================"
 
+          echo
           echo "PACKAGED_STATUS=${PACKAGED_STATUS:-unknown}"
+
+          echo
           echo "PACKAGED_OUTPUTPATH=${PACKAGED_OUTPUTPATH:-unknown}"
+
+          echo
           echo "PACKAGED_OUTPUTDATE=${PACKAGED_OUTPUTDATE:-unknown}"
 
           if [ -n "${PACKAGED_OUTPUTPATH:-}" ] && \
              [ -d "${PACKAGED_OUTPUTPATH}" ]; then
 
+            echo
+            echo "Packaged files:"
+
             find "${PACKAGED_OUTPUTPATH}" \
               -maxdepth 2 \
               -type f \
-              -printf '%p %k KB\n' \
+              -printf '%p %s bytes\n' \
               | sort
           fi
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 17. Upload raw OpenWrt rootfs
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Upload OpenWrt rootfs
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: n1-openwrt-25.12.5-rootfs
           path: |
-            ${{ env.ROOTFS }}
+            ${{ env.NORMALIZED_ROOTFS }}
           if-no-files-found: error
           retention-days: 14
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 18. Upload N1 firmware
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Upload N1 firmware
         if: success()
         uses: actions/upload-artifact@v4
@@ -425,9 +562,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # ------------------------------------------------------------
-      # 19. Upload build logs
-      # ------------------------------------------------------------
+      # ============================================================
+      # 19. Upload complete logs
+      # ============================================================
       - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -438,10 +575,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      # ------------------------------------------------------------
-      # 20. Upload final config
-      # ------------------------------------------------------------
-      - name: Upload final config
+      # ============================================================
+      # 20. Upload final configuration
+      # ============================================================
+      - name: Upload final configuration
         if: always()
         uses: actions/upload-artifact@v4
         with:
