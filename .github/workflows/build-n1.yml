@@ -11,7 +11,7 @@ env:
   OPENWRT_REPO: https://github.com/openwrt/openwrt.git
   OPENWRT_TAG: v25.12.5
   OPENWRT_DIR: openwrt
-  LOG_DIR: /tmp/openwrt-logs
+  LOG_DIR: ${{ github.workspace }}/openwrt-logs
 
 jobs:
   build:
@@ -21,14 +21,14 @@ jobs:
     steps:
 
       # ============================================================
-      # 1. Checkout repository
+      # 1. Checkout configuration
       # ============================================================
       - name: Checkout configuration
         uses: actions/checkout@v4
 
 
       # ============================================================
-      # 2. Prepare build environment
+      # 2. Prepare Ubuntu 24.04
       # ============================================================
       - name: Prepare Ubuntu
         shell: bash
@@ -72,17 +72,32 @@ jobs:
             fastjar \
             java-propose-classpath \
             default-jdk \
-            time
+            time \
+            gperf \
+            subversion \
+            mercurial \
+            bzip2 \
+            gzip \
+            tar \
+            xz-utils \
+            zstd
 
           echo
           echo "============================================================"
           echo "BUILD ENVIRONMENT"
           echo "============================================================"
 
+          echo "Ubuntu:"
           lsb_release -a || true
+
           echo
           echo "CPU:"
           nproc
+
+          echo
+          echo "MEMORY:"
+          free -h
+
           echo
           echo "DISK:"
           df -h
@@ -96,16 +111,24 @@ jobs:
         run: |
           set -euxo pipefail
 
-          sudo rm -rf "${LOG_DIR}"
-          sudo mkdir -p "${LOG_DIR}"
-          sudo chmod 777 "${LOG_DIR}"
+          rm -rf "${LOG_DIR}"
+          mkdir -p "${LOG_DIR}"
+          mkdir -p "${GITHUB_WORKSPACE}/artifacts"
 
+          echo "Workspace:"
+          pwd
+
+          echo
           echo "Log directory:"
           ls -ld "${LOG_DIR}"
 
+          echo
+          echo "Artifact directory:"
+          ls -ld "${GITHUB_WORKSPACE}/artifacts"
+
 
       # ============================================================
-      # 4. Clone official OpenWrt
+      # 4. Clone official OpenWrt 25.12.5
       # ============================================================
       - name: Clone OpenWrt
         shell: bash
@@ -130,6 +153,10 @@ jobs:
           git rev-parse HEAD
           git describe --tags --always || true
 
+          echo
+          echo "Expected tag:"
+          echo "${OPENWRT_TAG}"
+
 
       # ============================================================
       # 5. Install repository configuration
@@ -139,7 +166,7 @@ jobs:
         run: |
           set -euxo pipefail
 
-          echo "Checking repository files..."
+          echo "Checking repository configuration..."
 
           test -f .config
           test -f feeds.conf.default
@@ -149,7 +176,7 @@ jobs:
           echo "SOURCE .config"
           echo "============================================================"
 
-          grep -E '^CONFIG_TARGET|^CONFIG_TARGET_ROOTFS' .config || true
+          cat .config
 
           echo
           echo "============================================================"
@@ -200,16 +227,37 @@ jobs:
 
 
       # ============================================================
-      # 8. Generate defconfig + FULL TARGET DIAGNOSTICS
+      # 8. Add Argon theme
       #
-      # IMPORTANT:
-      # We intentionally DO NOT fail here when
-      # CONFIG_TARGET_armsr_armv8 is missing.
-      #
-      # We need to see what OpenWrt 25.12.5 actually produces
-      # after make defconfig.
+      # Current Argon master supports modern official OpenWrt.
       # ============================================================
-      - name: Generate defconfig and diagnose target
+      - name: Add Argon theme
+        shell: bash
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          set -euxo pipefail
+
+          echo "============================================================"
+          echo "INSTALLING ARGON SOURCE"
+          echo "============================================================"
+
+          rm -rf package/luci-theme-argon
+
+          git clone \
+            --depth=1 \
+            https://github.com/jerrykuku/luci-theme-argon.git \
+            package/luci-theme-argon
+
+          test -f package/luci-theme-argon/Makefile
+
+          echo
+          echo "Argon source installed."
+
+
+      # ============================================================
+      # 9. Generate defconfig
+      # ============================================================
+      - name: Generate defconfig
         shell: bash
         working-directory: ${{ env.OPENWRT_DIR }}
         run: |
@@ -222,13 +270,288 @@ jobs:
           make defconfig \
             2>&1 | tee "${LOG_DIR}/defconfig.log"
 
-          echo
+
+      # ============================================================
+      # 10. Verify target
+      # ============================================================
+      - name: Verify N1 target
+        shell: bash
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          set -euxo pipefail
+
           echo "============================================================"
-          echo "FINAL TARGET CONFIG"
+          echo "FINAL TARGET CONFIGURATION"
           echo "============================================================"
 
-          grep -E '^CONFIG_TARGET(_|=)' .config || true
+          grep -E '^CONFIG_TARGET|^CONFIG_TARGET_ROOTFS' .config \
+            | tee "${LOG_DIR}/target-config.log"
 
           echo
           echo "============================================================"
+          echo "REQUIRED TARGET CHECKS"
+          echo "============================================================"
+
+          grep -q '^CONFIG_TARGET_armsr=y$' .config
+          grep -q '^CONFIG_TARGET_armsr_armv8=y$' .config
+          grep -q '^CONFIG_TARGET_armsr_armv8_DEVICE_generic=y$'
+          grep -q '^CONFIG_TARGET_ROOTFS_TARGZ=y$'
+
+          echo
+          echo "TARGET CHECK: PASS"
+
+          echo
+          echo "Architecture:"
+          grep -E '^CONFIG_ARCH' .config || true
+
+          echo
+          echo "PassWall:"
+          grep -E '^CONFIG_PACKAGE_(luci-app-passwall|xray-core|sing-box)' .config || true
+
+          echo
+          echo "Argon:"
+          grep -E '^CONFIG_PACKAGE_luci-theme-argon' .config || true
+
+          echo
+          echo "============================================================"
+          echo "PACKAGE SELECTION"
+          echo "============================================================"
+
+          grep '^CONFIG_PACKAGE_' .config \
+            | grep -E \
+              'luci|passwall|xray|sing-box|wireguard|zerotier|argon' \
+            || true
+
+
+      # ============================================================
+      # 11. Download source packages
+      # ============================================================
+      - name: Download OpenWrt packages
+        shell: bash
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          set -o pipefail
+
+          echo "============================================================"
+          echo "DOWNLOADING OPENWRT SOURCES"
+          echo "============================================================"
+
+          make download -j8 V=s \
+            2>&1 | tee "${LOG_DIR}/download.log"
+
+
+      # ============================================================
+      # 12. Compile OpenWrt
+      #
+      # Use -j2 intentionally.
+      # This is slower than -j4 but substantially safer for
+      # large packages such as Rust/Xray-related dependencies.
+      # ============================================================
+      - name: Compile OpenWrt
+        shell: bash
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          set -o pipefail
+
+          echo "============================================================"
+          echo "START OPENWRT COMPILATION"
+          echo "============================================================"
+
+          echo "Build jobs: 2"
+
+          make -j2 V=s \
+            2>&1 | tee "${LOG_DIR}/build.log"
+
+
+      # ============================================================
+      # 13. Verify OpenWrt build output
+      # ============================================================
+      - name: Verify OpenWrt build output
+        shell: bash
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          set -euxo pipefail
+
+          echo "============================================================"
+          echo "OPENWRT BUILD OUTPUT"
+          echo "============================================================"
+
+          TARGET_DIR="bin/targets/armsr/armv8"
+
+          test -d "${TARGET_DIR}"
+
+          echo
+          echo "Target directory:"
+          ls -lah "${TARGET_DIR}"
+
+          echo
+          echo "Rootfs images:"
+          find "${TARGET_DIR}" \
+            -maxdepth 1 \
+            -type f \
+            -name '*rootfs.tar.gz' \
+            -print
+
+          ROOTFS_COUNT=$(find "${TARGET_DIR}" \
+            -maxdepth 1 \
+            -type f \
+            -name '*rootfs.tar.gz' \
+            | wc -l)
+
+          if [ "${ROOTFS_COUNT}" -lt 1 ]; then
+            echo "ERROR: No rootfs.tar.gz was generated."
+            exit 1
+          fi
+
+          echo
+          echo "ROOTFS CHECK: PASS"
+
+          echo
+          echo "Firmware files:"
+          find "${TARGET_DIR}" \
+            -maxdepth 1 \
+            -type f \
+            -printf '%f\n' \
+            | sort
+
+
+      # ============================================================
+      # 14. Package for Phicomm N1 using current Flippy Action
+      #
+      # IMPORTANT:
+      # Current Action uses ENV parameters.
+      # Do NOT change these to "with:".
+      # ============================================================
+      - name: Package Phicomm N1 firmware
+        uses: ophub/flippy-openwrt-actions@main
+        env:
+          OPENWRT_ARMSR: openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz
+
+          PACKAGE_SOC: s905d
+
+          KERNEL_REPO_URL: ophub/kernel
+          KERNEL_VERSION_NAME: 6.12.y
+          KERNEL_AUTO_LATEST: true
+
+          OPENWRT_IP: 192.168.1.1
+
+          GZIP_IMGS: gz
+
+          SELECT_PACKITPATH: openwrt_packit
+          SELECT_OUTPUTPATH: output
+
+          SAVE_OPENWRT_ROOTFS: true
+
+          OPENWRT_VER: 25.12.5
+          DISTRIB_DESCRIPTION: OpenWrt N1 25.12.5
+          WHOAMI: OpenWrt-N1
+
+          SW_FLOWOFFLOAD: 1
+          HW_FLOWOFFLOAD: 0
+          SFE_FLOW: 1
+
+          ENABLE_WIFI_K504: 1
+          ENABLE_WIFI_K510: 1
+
+
+      # ============================================================
+      # 15. Verify Flippy output
+      # ============================================================
+      - name: Verify N1 firmware output
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+
+          echo "============================================================"
+          echo "FLIPPY OUTPUT"
+          echo "============================================================"
+
+          if [ -d /opt/openwrt_packit/output ]; then
+            ls -lah /opt/openwrt_packit/output
+
+            echo
+            echo "N1 firmware files:"
+            find /opt/openwrt_packit/output \
+              -maxdepth 1 \
+              -type f \
+              -printf '%f\n' \
+              | sort
+          else
+            echo "Flippy output directory does not exist."
+          fi
+
+
+      # ============================================================
+      # 16. Collect firmware and logs
+      # ============================================================
+      - name: Collect build artifacts
+        if: always()
+        shell: bash
+        run: |
+          set +e
+
+          echo "============================================================"
+          echo "COLLECTING ARTIFACTS"
+          echo "============================================================"
+
+          mkdir -p "${GITHUB_WORKSPACE}/artifacts"
+
+          echo
+          echo "Copying logs..."
+
+          if [ -d "${LOG_DIR}" ]; then
+            cp -a "${LOG_DIR}/." \
+              "${GITHUB_WORKSPACE}/artifacts/" \
+              2>/dev/null || true
+          fi
+
+          echo
+          echo "Copying OpenWrt target files..."
+
+          if [ -d "${OPENWRT_DIR}/bin/targets/armsr/armv8" ]; then
+            mkdir -p "${GITHUB_WORKSPACE}/artifacts/openwrt-target"
+
+            cp -a \
+              "${OPENWRT_DIR}/bin/targets/armsr/armv8/." \
+              "${GITHUB_WORKSPACE}/artifacts/openwrt-target/" \
+              2>/dev/null || true
+          fi
+
+          echo
+          echo "Copying Flippy N1 firmware..."
+
+          if [ -d /opt/openwrt_packit/output ]; then
+            mkdir -p "${GITHUB_WORKSPACE}/artifacts/n1-firmware"
+
+            cp -a \
+              /opt/openwrt_packit/output/. \
+              "${GITHUB_WORKSPACE}/artifacts/n1-firmware/" \
+              2>/dev/null || true
+          fi
+
+          echo
+          echo "============================================================"
+          echo "FINAL ARTIFACT TREE"
+          echo "============================================================"
+
+          find "${GITHUB_WORKSPACE}/artifacts" \
+            -maxdepth 3 \
+            -type f \
+            -printf '%p\n' \
+            | sort || true
+
+
+      # ============================================================
+      # 17. Upload firmware + logs
+      # ============================================================
+      - name: Upload firmware and build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: n1-openwrt-25.12.5-build-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: warn
+          compression-level: 6
+          retention-days: 14
 
